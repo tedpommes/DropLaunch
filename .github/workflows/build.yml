@@ -1,0 +1,94 @@
+# Builds DropLaunch.exe on GitHub's own Windows machines and, for a release, sends it to SignPath
+# for code signing (SignPath only signs what a GitHub Actions build of this repository made).
+#
+# Every push and pull request: tests + build, the exe kept as the "DropLaunch" artifact.
+# A tag like v2.0.1, or "Run workflow" with sign ticked: the same, then a signing request; once it's
+# approved on signpath.io the signed exe is the "DropLaunch-signed" artifact.
+#
+# Needs (repository Settings -> Secrets and variables -> Actions):
+#   secret   SIGNPATH_API_TOKEN       a SignPath API token (CI user, submitter in the policy)
+#   variable SIGNPATH_ORGANIZATION_ID from signpath.io
+#   variable SIGNPATH_PROJECT_SLUG    e.g. DropLaunch
+#   variable SIGNPATH_POLICY_SLUG     e.g. release-signing
+# Without the secret the signing step is skipped and the unsigned build still works.
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      sign:
+        description: Send the build to SignPath for signing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build
+        run: |
+          cargo build --release --locked
+          New-Item -ItemType Directory -Force ..\out | Out-Null
+          Copy-Item target\release\droplaunch.exe ..\out\DropLaunch.exe
+
+      - name: Keep the exe
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: DropLaunch
+          path: out/DropLaunch.exe
+          if-no-files-found: error
+
+      - name: Sign with SignPath
+        if: env.SIGNPATH_API_TOKEN != '' && (startsWith(github.ref, 'refs/tags/v') || inputs.sign)
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
+          wait-for-completion: true
+          # approve the request on signpath.io within the hour
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed
+
+      - name: Keep the signed exe
+        if: env.SIGNPATH_API_TOKEN != '' && (startsWith(github.ref, 'refs/tags/v') || inputs.sign)
+        uses: actions/upload-artifact@v4
+        with:
+          name: DropLaunch-signed
+          path: signed/
+          if-no-files-found: error

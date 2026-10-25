@@ -1,0 +1,220 @@
+{
+ "mode": "conpty",
+ "exit_code": 0,
+ "args": [
+  "+force_install_dir",
+  "C:\\Users\\TP\\Desktop\\Droplaaauc\\Server_Files",
+  "+login",
+  "anonymous",
+  "+app_update",
+  "258550",
+  "validate",
+  "+quit"
+ ],
+ "events": [
+  {
+   "t": 0.015,
+   "src": "PTY",
+   "bytes": 16,
+   "raw": "\u001b[?9001h\u001b[?1004h"
+  },
+  {
+   "t": 0.025,
+   "src": "PTY",
+   "bytes": 160,
+   "raw": "\u001b[?25l\u001b[2J\u001b[m\u001b[HRedirecting stderr to 'C:\\Users\\TP\\Desktop\\Droplaaauc\\SteamCMD\\logs\\stderr.txt'\r\n\u001b]0;C:\\Users\\TP\\Desktop\\Droplaaauc\\SteamCMD\\steamcmd.exe\u0007\u001b[?25h"
+  },
+  {
+   "t": 0.041,
+   "src": "PTY",
+   "bytes": 109,
+   "raw": "Logging directory: 'C:\\Users\\TP\\Desktop\\Droplaaauc\\SteamCMD/logs'\r\n[  0%] Checking for available updates...\r\n"
+  },
+  {
+   "t": 7.666,
+   "src": "PTY",
+   "bytes": 34,
+   "raw": "[----] Verifying installation...\r\n"
+  },
+  {
+   "t": 7.747,
+   "src": "PTY",
+   "bytes": 42,
+   "raw": "Steam Console Client (c) Valve Corporation"
+  },
+  {
+   "t": 7.76,
+   "src": "PTY",
+   "bytes": 70,
+   "raw": " - version 1788292693\r\n-- type 'quit' to exit --\r\nLoading Steam API..."
+  },
+  {
+   "t": 7.798,
+   "src": "PTY",
+   "bytes": 4,
+   "raw": "OK\r\n"
+  },
+  {
+   "t": 7.837,
+   "src": "LOG",
+   "text": ""
+  },
+  {
+   "t": 7.837,
+   "src": "LOG",
+   "text": ""
+  },
+  {
+   "t": 7.837,
+   "src": "LOG",
+   "text": "[2026-10-07 01:37:33] Client version: 1788292693"
+  },
+  {
+   "t": 7.837,
+   "src": "LOG",
+   "text": "[2026-10-07 01:37:33] Loading Steam API..."
+  },
+  {
+   "t": 7.837,
+   "src": "LOG",
+   "text": "[2026-10-07 01:37:33] OK"
+  },
+  {
+   "t": 7.901,
+   "src": "PTY",
+   "bytes": 43,
+   "raw": "\r\nConnecting anonymously to Steam Public..."
+  },
+  {
+   "t": 7.942,
+   "src": "LOG",
+   "text": "[2026-10-07 01:37:33] "
+  },
+  {
+   "t": 7.942,
+   "src": "LOG",
+   "text": "Connecting anonymously to Steam Public..."
+  },
+  {
+   "t": 15.879,
+   "src": "PTY",
+   "bytes": 4,
+   "raw": "OK\r\n"
+  },
+  {
+   "t": 15.894,
+   "src": "PTY",
+   "bytes": 28,
+   "raw": "Waiting for client config..."
+  },
+  {
+   "t": 15.981,
+   "src": "LOG",
+   "text": "[2026-10-07 01:37:41] OK"
+  },
+  {
+   "t": 15.981,
+   "src": "LOG",
+   "text": "[2026-10-07 01:37:41] Waiting for client config..."
+  },
+  {
+   "t": 16.816,
+   "src": "PTY",
+   "bytes": 4,
+   "raw": "OK\r\n"
+  },
+  {
+   "t": 16.832,
+   "src": "PTY",
+   "bytes": 28,
+   "raw": "Waiting for user info...OK\r\n"
+  },
+  {
+   "t": 16.89,
+   "src": "LOG",
+   "text": "[2026-10-07 01:37:42] OK"
+  },
+  {
+   "t": 16.89,
+   "src": "LOG",
+   "text": "[2026-10-07 01:37:42] Waiting for user info..."
+  },
+  {
+   "t": 16.89,
+   "src": "LOG",
+   "text": "[2026-10-07 01:37:42] OK"
+  },
+  {
+   "t": 19.195,
+   "src": "PTY",
+   "bytes": 82,
+   "raw": " Update state (0x5) verifying install, progress: 30.93 (1887827181 / 6103829589)\r\n"
+  },
+  {
+   "t": 19.204,
+   "src": "LOG",
+   "text": "[2026-10-07 01:37:44]  Update state (0x5) verifying install, progress: 30.93 (1887827181 / 6103829589)"
+  },
+  {
+   "t": 21.197,
+   "src": "PTY",
+   "bytes": 82,
+   "raw": " Update state (0x5) verifying install, progress: 66.30 (4046880419 / 6103829589)\r\n"
+  },
+  {
+   "t": 21.218,
+   "src": "LOG",
+   "text": "[2026-10-07 01:37:46]  Update state (0x5) verifying install, progress: 66.30 (4046880419 / 6103829589)"
+  },
+  {
+   "t": 23.198,
+   "src": "PTY",
+   "bytes": 53,
+   "raw": " Update state (0x0) unknown, progress: 0.00 (0 / 0)\r\n"
+  },
+  {
+   "t": 23.213,
+   "src": "PTY",
+   "bytes": 40,
+   "raw": "Success! App '258550' fully installed.\r\n"
+  },
+  {
+   "t": 23.232,
+   "src": "LOG",
+   "text": "[2026-10-07 01:37:48]  Update state (0x0) unknown, progress: 0.00 (0 / 0)"
+  },
+  {
+   "t": 23.232,
+   "src": "LOG",
+   "text": "[2026-10-07 01:37:48] Success! App '258550' fully installed."
+  },
+  {
+   "t": 23.259,
+   "src": "PTY",
+   "bytes": 22,
+   "raw": "Unloading Steam API..."
+  },
+  {
+   "t": 23.336,
+   "src": "LOG",
+   "text": "[2026-10-07 01:37:48] Unloading Steam API..."
+  },
+  {
+   "t": 23.355,
+   "src": "PTY",
+   "bytes": 4,
+   "raw": "OK\r\n"
+  },
+  {
+   "t": 23.39,
+   "src": "PTY",
+   "bytes": 16,
+   "raw": "\u001b[?9001l\u001b[?1004l"
+  },
+  {
+   "t": 23.437,
+   "src": "LOG",
+   "text": "[2026-10-07 01:37:48] OK"
+  }
+ ]
+}

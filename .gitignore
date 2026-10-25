@@ -1,0 +1,15 @@
+/src-tauri/target/
+/src-tauri/gen/
+*.part
+droplaunch.json
+# release builds to upload (see README, Updates); the release key never goes in the repo
+/release/
+*.key
+# source snapshots kept locally (e.g. before Play with friends was taken out)
+/_backup/
+# the public demo, built by dev/build_demo.py
+/dist/
+# kept on this PC only: the browser preview and demo website (dev/), maintainer notes, Claude's settings
+/dev/
+/MAINTAINING.md
+/.claude/

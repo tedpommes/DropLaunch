@@ -1,0 +1,45 @@
+"AppState"
+{
+	"appid"		"258550"
+	"Universe"		"1"
+	"LauncherPath"		"C:\\Users\\TP\\Desktop\\Droplaaauc\\SteamCMD\\steamcmd.exe"
+	"name"		"Rust Dedicated Server"
+	"StateFlags"		"4"
+	"installdir"		"rust_dedicated"
+	"LastUpdated"		"1791328625"
+	"LastPlayed"		"0"
+	"SizeOnDisk"		"6103829589"
+	"StagingSize"		"0"
+	"buildid"		"25681086"
+	"LastOwner"		"76561200520651898"
+	"DownloadType"		"1"
+	"UpdateResult"		"0"
+	"BytesToDownload"		"0"
+	"BytesDownloaded"		"0"
+	"BytesToStage"		"0"
+	"BytesStaged"		"0"
+	"TargetBuildID"		"25681086"
+	"AutoUpdateBehavior"		"0"
+	"AllowOtherDownloadsWhileRunning"		"0"
+	"ScheduledAutoUpdate"		"0"
+	"FullValidateAfterNextUpdate"		"1"
+	"InstalledDepots"
+	{
+		"258551"
+		{
+			"manifest"		"3470645669021200304"
+			"size"		"818681016"
+		}
+		"258554"
+		{
+			"manifest"		"6405741909129183320"
+			"size"		"5285148573"
+		}
+	}
+	"UserConfig"
+	{
+	}
+	"MountedConfig"
+	{
+	}
+}

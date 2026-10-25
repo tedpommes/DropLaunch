@@ -1,0 +1,80 @@
+[package]
+name = "droplaunch"
+version = "2.0.0"
+description = "DropLaunch - Rust map testing made simple"
+authors = ["TedPommes"]
+license = "GPL-3.0-or-later"
+repository = "https://github.com/tedpommes/Rust-DropLaunch"
+edition = "2021"
+rust-version = "1.91"
+default-run = "droplaunch"
+
+[lib]
+name = "droplaunch_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "droplaunch"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = [] }
+tauri-plugin-dialog = "2.8"
+tauri-plugin-single-instance = "2.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+regex = "1"
+portable-pty = "0.9"
+ureq = "2.12"
+zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+notify = "8"
+blake3 = "1"
+# Self-update signatures.
+ed25519-dalek = { version = "3", default-features = false }
+# Map pictures for the playtest page (.map files are LZ4 compressed); block decoding only.
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-decode", "checked-decode"] }
+
+[dev-dependencies]
+# examples/mapinfo.rs (map preview research)
+png = "0.17"
+# examples/release.rs (a new release key)
+getrandom = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# Windows notifications (WinRT); the same version Tauri already uses.
+windows = { version = "0.62", features = ["Foundation", "Data_Xml_Dom", "UI_Notifications", "Win32_System_Com"] }
+
+[target.'cfg(unix)'.dependencies]
+flate2 = "1"
+tar = "0.4"
+
+[features]
+default = ["custom-protocol"]
+# Serve the ui/ folder from inside the exe (what `tauri build` normally switches on),
+# so a plain `cargo build --release` produces the final single-file app.
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

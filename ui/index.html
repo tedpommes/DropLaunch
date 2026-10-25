@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>DropLaunch</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body class="simple">
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <defs>
+        <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.5 6.2M3 12a9 9 0 0 1 15.5-6.2" /><path d="M21 4v5h-5M3 20v-5h5" /></symbol>
+        <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 20h16" /></symbol>
+        <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16" /></symbol>
+        <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z" /><path d="M8.5 12.2l2.4 2.4 4.6-4.8" /></symbol>
+        <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></symbol>
+        <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></symbol>
+        <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 4l9 16H3z" /><path d="M12 10v4M12 17.5v.01" /></symbol>
+        <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.2l2 2.2h8.8A1.5 1.5 0 0 1 21 8.7v9.8a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z" /></symbol>
+        <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></symbol>
+        <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3" /></symbol>
+        <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12M9 7V4h6v3" /></symbol>
+        <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0 5 5L21 13a7 7 0 0 1-8.6 1.4L6 20.8a2 2 0 0 1-2.8-2.8l6.4-6.4A7 7 0 0 1 11 3l1.7 1.3a4 4 0 0 0 2 2z" /></symbol>
+        <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5z" /></symbol>
+        <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2" /></symbol>
+        <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="18" cy="18" r="2" /></symbol>
+        <symbol id="i-map" viewBox="0 0 24 24"><path d="M9 4L3 6.5V20l6-2.5 6 2.5 6-2.5V4l-6 2.5z" /><path d="M9 4v13.5M15 6.5V20" /></symbol>
+        <symbol id="i-terrain" viewBox="0 0 24 24"><path d="M2.5 19.5l6.5-10 4.5 6.5 3-4 5 7.5z" /><circle cx="17" cy="6" r="2" /></symbol>
+        <symbol id="i-server" viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="7" rx="2" /><rect x="3.5" y="13" width="17" height="7" rx="2" /><path d="M7.5 7.5h.01M7.5 16.5h.01" /></symbol>
+        <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" /><path d="M20 20l-4.2-4.2" /></symbol>
+        <symbol id="i-sort" viewBox="0 0 24 24"><path d="M7 4v16M3.5 16.5L7 20l3.5-3.5M17 20V4M13.5 7.5L17 4l3.5 3.5" /></symbol>
+        <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6" /></symbol>
+        <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M4 6l6 6-6 6M12 18h8" /></symbol>
+        <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /></symbol>
+        <symbol id="i-folder-edit" viewBox="0 0 24 24"><path d="M11 20H4.5A1.5 1.5 0 0 1 3 18.5v-12A1.5 1.5 0 0 1 4.5 5h4.2l2 2.2h8.8A1.5 1.5 0 0 1 21 8.7v1.8" /><path d="M19.6 13.4a1.7 1.7 0 0 1 2.4 2.4l-6 6-3.2.8.8-3.2z" /></symbol>
+        <symbol id="i-flask" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6.2L4.6 18.4A1.7 1.7 0 0 0 6.1 21h11.8a1.7 1.7 0 0 0 1.5-2.6L14 9.2V3" /><path d="M7.2 15h9.6" /></symbol>
+        <symbol id="i-expand" viewBox="0 0 24 24"><path d="M14 4h6v6M10 20H4v-6M20 4l-6.5 6.5M4 20l6.5-6.5" /></symbol>
+        <symbol id="i-collapse" viewBox="0 0 24 24"><path d="M14 10h6M14 10V4M10 14H4M10 14v6M14 10l6.5-6.5M10 14l-6.5 6.5" /></symbol>
+        <symbol id="i-history" viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6" /><path d="M3 4v4.5h4.5" /><path d="M12 7.5V12l3 2" /></symbol>
+        <symbol id="i-save" viewBox="0 0 24 24"><path d="M5 4h11l3 3v12a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z" /><path d="M8 4v5h7V4M8 20v-6h8v6" /></symbol>
+        <symbol id="i-hourglass" viewBox="0 0 24 24"><path d="M7 3h10M7 21h10M8 3v3.5a4 4 0 0 0 1.6 3.2L12 12l-2.4 2.3A4 4 0 0 0 8 17.5V21M16 3v3.5a4 4 0 0 1-1.6 3.2L12 12l2.4 2.3a4 4 0 0 1 1.6 3.2V21" /></symbol>
+        <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0" /><path d="M16 4.7a3.5 3.5 0 0 1 0 6.6M18.2 13.9A6.5 6.5 0 0 1 21.5 20" /></symbol>
+        <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2" /></symbol>
+        <symbol id="i-arrow-right" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6" /></symbol>
+        <symbol id="i-arrow-left" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6" /></symbol>
+        <symbol id="i-bug" viewBox="0 0 24 24"><path d="M9 7.5a3 3 0 0 1 6 0M7.5 10h9v4.5a4.5 4.5 0 0 1-9 0zM12 10v9M4 13.5h3.5M16.5 13.5H20M5.5 8.5l2.2 1.7M18.5 8.5l-2.2 1.7M5.5 19l2.4-1.8M18.5 19l-2.4-1.8" /></symbol>
+        <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+        <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14" /></symbol>
+        <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9.5 18h5M10.5 21h3M12 3a6 6 0 0 0-3.7 10.7c.7.6 1.2 1.4 1.2 2.3h5c0-.9.5-1.7 1.2-2.3A6 6 0 0 0 12 3z" /></symbol>
+        <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97A7 7 0 0 0 4.4 11.6 3.75 3.75 0 0 0 6.5 19z" /><path d="M12 11v5M9.5 13.5 12 11l2.5 2.5" /></symbol>
+        <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z" /></symbol>
+        <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></symbol>
+        <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></symbol>
+        <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></symbol>
+        <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8.5a6 6 0 0 0-12 0c0 6.5-2.5 8.5-2.5 8.5h17S18 15 18 8.5M13.7 20.5a2 2 0 0 1-3.4 0" /></symbol>
+        <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 20h4.5L19.5 9a2.1 2.1 0 0 0-3-3L5.5 17v3z" /><path d="M14.5 8l3 3" /></symbol>
+        <symbol id="i-gift" viewBox="0 0 24 24"><rect x="3.5" y="8" width="17" height="4" rx="1" /><path d="M5 12v7.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V12M12 8v12.5M12 8S10.5 3.5 8 3.5a2.25 2.25 0 0 0 0 4.5M12 8s1.5-4.5 4-4.5a2.25 2.25 0 0 1 0 4.5" /></symbol>
+        <symbol id="i-join" viewBox="0 0 24 24"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3" /></symbol>
+      </defs>
+    </svg>
+
+    <header class="topbar">
+      <div class="brand">
+        <img src="logo.png" alt="" class="brand-logo" />
+        <span class="brand-name">DropLaunch</span>
+        <button class="tag tag-btn" id="btn-about" data-t-title="topbar.about.title" data-t="topbar.preview"></button>
+      </div>
+      <nav class="tabs" role="tablist" data-t-label="topbar.tabs">
+        <button role="tab" id="tab-maps" data-tab="maps" aria-selected="true"><svg><use href="#i-map" /></svg><span data-t="topbar.tab.maps"></span></button>
+        <button role="tab" id="tab-files" data-tab="files" aria-selected="false"><svg><use href="#i-server" /></svg><span data-t="topbar.tab.files"></span><i class="tab-dot" id="tab-files-dot" hidden></i></button>
+      </nav>
+      <div class="pills">
+        <div class="status-group" role="group" data-t-label="topbar.status">
+          <button class="pill" id="pill-steamcmd" data-t-title="topbar.pill.title"><i></i><span data-t="topbar.pill.steamcmd.short"></span></button>
+          <button class="pill" id="pill-server" data-t-title="topbar.pill.title"><i></i><span data-t="topbar.pill.server.short"></span></button>
+        </div>
+        <button class="btn btn-small update-btn" id="btn-update" hidden><svg><use href="#i-download" /></svg><span id="btn-update-label" data-t="update.button"></span></button>
+        <button class="btn btn-small btn-ghost view-toggle" id="btn-view" aria-pressed="false" data-t-title="topbar.more.title"><svg><use href="#i-expand" /></svg><span data-t="topbar.more"></span></button>
+        <button class="btn btn-small btn-ghost settings-toggle" id="btn-settings" data-t-title="topbar.settings.title" data-t-label="topbar.settings.title"><svg><use href="#i-gear" /></svg></button>
+      </div>
+    </header>
+
+    <!-- Maps: the list, the server panel and its console -->
+    <main class="layout view" id="view-maps">
+      <div class="col-main">
+        <section class="card maps-card">
+          <div class="card-head">
+            <div class="maps-title">
+              <h2 data-t="maps.title"></h2>
+              <p class="sub" id="maps-sub" data-t="common.loading"></p>
+            </div>
+            <div class="maps-tools">
+              <span class="maps-branch" id="maps-branch-box" data-t-title="maps.branch.title" hidden><select id="maps-branch" data-size="sm" data-t-label="common.branch"></select></span>
+              <label class="search" data-t-title="maps.search.title">
+                <svg><use href="#i-search" /></svg>
+                <input id="map-search" type="search" data-t-placeholder="maps.search" autocomplete="off" spellcheck="false" />
+              </label>
+              <button class="icon-btn" id="btn-maps-sort" data-t-title="maps.sort.date"><svg><use href="#i-sort" /></svg></button>
+              <button class="icon-btn" id="btn-maps-folder" data-t-title="maps.folder.title"><svg><use href="#i-folder" /></svg></button>
+              <button class="icon-btn" id="btn-maps-refresh" data-t-title="maps.refresh.title"><svg><use href="#i-refresh" /></svg></button>
+            </div>
+          </div>
+          <div class="map-list" id="map-list" role="listbox" tabindex="0" data-t-label="maps.title"></div>
+          <p class="drop-hint"><svg><use href="#i-upload" /></svg><span data-t="maps.dropHint"></span></p>
+        </section>
+
+        <div class="splitter" id="splitter" role="separator" aria-orientation="horizontal" data-t-label="common.resize" data-t-title="common.splitter.title" tabindex="0"><i></i></div>
+
+        <section class="card console-card" id="console-card">
+          <div class="card-head">
+            <div class="log-title">
+              <h2 data-t="console.title"></h2>
+              <span class="live" id="console-live" hidden><i></i><span data-t="console.connected"></span></span>
+            </div>
+            <div class="log-tools">
+              <button class="btn btn-small btn-ghost" id="btn-open-log" data-t-title="console.logFile.title" disabled><svg><use href="#i-file" /></svg><span data-t="console.logFile"></span></button>
+              <button class="btn btn-small btn-ghost" id="btn-copy-console" data-t-title="console.copy.title"><svg><use href="#i-copy" /></svg><span data-t="common.copy"></span></button>
+              <button class="btn btn-small btn-ghost" id="btn-clear-console" data-t-title="console.clear.title"><svg><use href="#i-trash" /></svg><span data-t="common.clear"></span></button>
+              <button class="icon-btn max-btn" data-max="console-card" data-t-title="common.fullScreen"><svg><use href="#i-expand" /></svg></button>
+            </div>
+          </div>
+          <div class="log console" id="console" tabindex="0">
+            <div class="log-empty" id="console-empty" data-t="console.empty"></div>
+          </div>
+          <form class="console-input" id="console-form" autocomplete="off">
+            <svg><use href="#i-terminal" /></svg>
+            <input id="console-input" data-t-placeholder="console.placeholder.idle" spellcheck="false" disabled />
+            <button class="btn btn-small btn-ghost" id="console-send" type="submit" disabled data-t="console.send"></button>
+          </form>
+        </section>
+      </div>
+
+      <div class="vsplitter" role="separator" aria-orientation="vertical" data-t-label="common.resizeSide" data-t-title="common.vsplitter.title" tabindex="0"><i></i></div>
+
+      <aside class="col-side">
+        <!-- The guide's Getting started checklist (guide.js) -->
+        <section class="card guide-card" id="guide-card" data-t-label="guide.title" hidden></section>
+        <!-- Server files that need something (update, repair, Oxide), and SteamCMD jobs while they run -->
+        <section class="card strip" id="strip" hidden>
+          <div class="strip-row">
+            <span class="strip-icon" id="strip-icon"><svg><use href="#i-download" /></svg></span>
+            <div class="strip-text">
+              <strong id="strip-title"></strong><span id="strip-detail"></span>
+              <div class="strip-actions">
+                <!-- A server update: Carbon or Oxide along with it (the same switch as in Settings) -->
+                <label class="check strip-check" id="strip-framework" hidden><input type="checkbox" id="strip-framework-on" /><span class="box"><svg><use href="#i-check" /></svg></span><span class="strip-check-label" id="strip-framework-label"></span></label>
+                <button class="btn btn-small btn-primary" id="strip-action"></button>
+              </div>
+            </div>
+            <button class="icon-btn" id="strip-close" data-t-title="common.dismiss" hidden><svg><use href="#i-x" /></svg></button>
+          </div>
+          <div class="strip-progress" id="strip-progress" hidden>
+            <div class="bar indeterminate" id="strip-bar"><div class="bar-fill" id="strip-fill"></div></div>
+            <div class="strip-meta"><span id="strip-text"></span><span id="strip-pct"></span></div>
+          </div>
+        </section>
+        <section class="card server-panel" id="server-panel"></section>
+        <!-- Kits ("Give items"): a kit and Give to; full screen (its expand button) for everything (kits.js) -->
+        <section class="card foldable kits-card" id="kits-card" hidden>
+          <div class="card-head kits-head">
+            <button class="btn btn-small btn-ghost back-btn" id="kits-back" data-t-title="common.backEsc"><svg><use href="#i-arrow-left" /></svg><span data-t="common.back"></span></button>
+            <span class="kits-icon"><svg><use href="#i-gift" /></svg></span>
+            <h2 data-t="kits.card.title"></h2>
+            <span class="spacer"></span>
+            <button class="icon-btn max-btn" data-max="kits-card" data-t-title="common.fullScreen"><svg><use href="#i-expand" /></svg></button>
+            <button class="icon-btn fold-btn" data-t-title="common.fold" aria-expanded="true"><svg><use href="#i-chevron" /></svg></button>
+          </div>
+          <div class="kits-main" id="kits-main"></div>
+        </section>
+        <!-- Bug reports: testers' /bug from Rust's chat, the newest open ones; the page for all (playtest.js) -->
+        <section class="card foldable bugs-card" id="bugs-card">
+          <div class="card-head bugs-head">
+            <span class="bugs-icon"><svg><use href="#i-bug" /></svg></span>
+            <h2 data-t="playtest.reports"></h2>
+            <span class="bugs-count" id="bugs-count" hidden></span>
+            <span class="spacer"></span>
+            <button class="icon-btn" id="bugs-open" data-t-title="bugs.open.title"><svg><use href="#i-expand" /></svg></button>
+            <button class="icon-btn fold-btn" data-t-title="common.fold" aria-expanded="true"><svg><use href="#i-chevron" /></svg></button>
+          </div>
+          <div class="bugs-body" id="bugs-body"></div>
+        </section>
+      </aside>
+    </main>
+
+    <!-- Server files: SteamCMD, updates, mods, scripts, folders -->
+    <main class="layout view" id="view-files" hidden>
+      <div class="col-main">
+        <section class="card foldable" id="server-card" data-start-folded>
+          <div class="card-head">
+            <div>
+              <h2 data-t="files.title"></h2>
+              <p class="sub"><span id="server-sub" data-t="common.loading"></span><span class="fold-only" id="server-facts-line"></span></p>
+            </div>
+            <span class="badge" id="update-badge" hidden data-t="files.updateBadge"></span>
+            <button class="icon-btn fold-btn" data-t-title="common.fold" aria-expanded="true"><svg><use href="#i-chevron" /></svg></button>
+          </div>
+
+          <div class="setup-banner fold-keep" id="setup-banner" hidden>
+            <svg><use href="#i-alert" /></svg>
+            <div><strong data-t="files.setupNeeded"></strong><span id="setup-banner-text"></span></div>
+            <button class="btn btn-primary" id="btn-open-setup"><svg><use href="#i-wrench" /></svg><span data-t="files.fixIt"></span></button>
+          </div>
+
+          <dl class="facts">
+            <div id="fact-build-box"><dt data-t="files.fact.build"></dt><dd id="fact-build">—</dd><span class="fact-note" id="fact-build-note"></span></div>
+            <div><dt data-t="common.branch"></dt><dd id="fact-branch">—</dd><span class="fact-note" id="fact-branch-note"></span></div>
+            <div><dt data-t="files.fact.size"></dt><dd id="fact-size">—</dd><span class="fact-note" id="fact-size-note"></span></div>
+          </dl>
+
+          <div class="installs" id="installs" hidden></div>
+
+          <div class="actions fold-keep">
+            <select id="branch-select" data-t-label="common.branch"></select>
+            <button class="btn btn-ghost" id="btn-check" data-t-title="files.check.title">
+              <svg><use href="#i-refresh" /></svg><span data-t="files.check"></span>
+            </button>
+            <span class="spacer"></span>
+            <button class="btn btn-ghost" id="btn-verify" data-t-title="files.verify.title">
+              <svg><use href="#i-shield" /></svg><span data-t="files.verify"></span>
+            </button>
+            <button class="btn btn-primary" id="btn-primary">
+              <svg><use href="#i-download" /></svg><span id="btn-primary-label"></span>
+            </button>
+            <button class="btn btn-danger" id="btn-cancel" hidden>
+              <svg><use href="#i-x" /></svg><span data-t="common.cancel"></span>
+            </button>
+          </div>
+
+          <div class="progress fold-keep" id="progress" hidden>
+            <ol class="steps" id="steps">
+              <li data-step="steamcmd"><span class="step-dot"><svg><use href="#i-check" /></svg></span><span data-t="files.step.steamcmd"></span></li>
+              <li data-step="login"><span class="step-dot"><svg><use href="#i-check" /></svg></span><span data-t="files.step.login"></span></li>
+              <li data-step="files"><span class="step-dot"><svg><use href="#i-check" /></svg></span><span id="step-files-label" data-t="files.step.files"></span></li>
+              <li data-step="done"><span class="step-dot"><svg><use href="#i-check" /></svg></span><span data-t="files.step.done"></span></li>
+            </ol>
+            <div class="progress-row">
+              <span id="p-text" data-t="files.starting"></span>
+              <span id="p-pct"></span>
+            </div>
+            <div class="bar indeterminate" id="p-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+              <div class="bar-fill" id="p-fill"></div>
+            </div>
+            <div class="progress-meta">
+              <span id="p-meta"></span>
+              <span id="p-elapsed"></span>
+            </div>
+          </div>
+
+          <div class="result fold-keep" id="result" hidden>
+            <span class="result-icon"><svg id="result-svg"><use href="#i-check" /></svg></span>
+            <div class="result-text"><strong id="result-title"></strong><span id="result-detail"></span></div>
+          </div>
+        </section>
+
+        <section class="card log-card" id="log-card">
+          <div class="card-head">
+            <div class="log-title">
+              <h2 data-t="files.log.title"></h2>
+              <span class="live" id="live" hidden><i></i><span data-t="files.log.live"></span></span>
+            </div>
+            <div class="log-tools">
+              <button class="btn btn-small btn-ghost" id="btn-copy-log" data-t-title="files.log.copy.title"><svg><use href="#i-copy" /></svg><span data-t="common.copy"></span></button>
+              <button class="btn btn-small btn-ghost" id="btn-clear-log" data-t-title="files.log.clear.title"><svg><use href="#i-trash" /></svg><span data-t="common.clear"></span></button>
+              <button class="icon-btn max-btn" data-max="log-card" data-t-title="common.fullScreen"><svg><use href="#i-expand" /></svg></button>
+            </div>
+          </div>
+          <div class="log" id="log" tabindex="0">
+            <div class="log-empty" id="log-empty" data-t="files.log.empty"></div>
+          </div>
+        </section>
+      </div>
+
+      <div class="vsplitter" role="separator" aria-orientation="vertical" data-t-label="common.resizeSide" data-t-title="common.vsplitter.title" tabindex="0"><i></i></div>
+
+      <aside class="col-side">
+        <section class="card foldable" id="mods-card">
+          <div class="card-head">
+            <div>
+              <h2 data-t="mods.title"></h2>
+              <p class="sub" data-t="mods.sub"></p>
+            </div>
+            <button class="icon-btn fold-btn" data-t-title="common.fold" aria-expanded="true"><svg><use href="#i-chevron" /></svg></button>
+          </div>
+          <div class="oxide-warning" id="oxide-warning" hidden>
+            <svg><use href="#i-alert" /></svg>
+            <div><strong data-t="mods.oxide.title"></strong><span data-t="mods.oxide.text"></span></div>
+            <button class="btn btn-small btn-primary" id="btn-reapply-oxide" data-t="mods.oxide.reapply"></button>
+          </div>
+          <dl class="kv">
+            <div><dt data-t="common.modFramework"></dt><dd id="mods-framework">—</dd></div>
+            <div><dt data-t="mods.rustedit"></dt><dd id="mods-rustedit">—</dd></div>
+            <div><dt data-t="mods.owner"></dt><dd id="mods-owner">—</dd></div>
+          </dl>
+          <div class="mods-toggles">
+            <label class="check" id="mods-playtest-row" data-t-title="plugin.title">
+              <input type="checkbox" id="mods-playtest" />
+              <span class="box"><svg><use href="#i-check" /></svg></span>
+              <span><span data-t="plugin.add"></span> <em id="mods-playtest-note"></em></span>
+            </label>
+            <label class="check" id="mods-profiler-row" hidden data-t-title="mods.profiler.title">
+              <input type="checkbox" id="mods-profiler" />
+              <span class="box"><svg><use href="#i-check" /></svg></span>
+              <span><span data-t="mods.profiler"></span> <em data-t="mods.profiler.note"></em></span>
+            </label>
+          </div>
+          <div class="scripts" id="scripts"></div>
+          <button class="btn btn-small btn-ghost btn-block" id="btn-setup-options"><svg><use href="#i-sliders" /></svg><span data-t="mods.setupOptions"></span></button>
+        </section>
+
+        <!-- The Rust game on this PC and its map cache -->
+        <section class="card foldable" id="game-card">
+          <div class="card-head">
+            <div>
+              <h2 data-t="game.title"></h2>
+              <p class="sub" id="game-sub" data-t="game.looking"></p>
+            </div>
+            <button class="icon-btn" id="btn-game-cache" data-t-title="game.openCache.title" disabled><svg><use href="#i-folder" /></svg></button>
+            <button class="icon-btn fold-btn" data-t-title="common.fold" aria-expanded="true"><svg><use href="#i-chevron" /></svg></button>
+          </div>
+          <div class="game-body" id="game-body"></div>
+        </section>
+
+        <section class="card foldable" id="folders-card">
+          <div class="card-head">
+            <h2 data-t="folders.title"></h2>
+            <button class="icon-btn fold-btn" data-t-title="common.fold" aria-expanded="true"><svg><use href="#i-chevron" /></svg></button>
+          </div>
+          <div class="folders" id="folders"></div>
+        </section>
+
+      </aside>
+    </main>
+
+    <footer class="footer">
+      <span id="footer-config"></span>
+      <span>DropLaunch <span id="footer-version"></span> · <button class="footer-link" id="footer-licenses" data-t-title="footer.licenses.title" data-t="footer.licenses"></button></span>
+    </footer>
+
+    <!-- Shown while files are dragged over the window -->
+    <div class="drop-overlay" id="drop-overlay" hidden>
+      <div class="drop-box">
+        <span class="drop-icon"><svg><use href="#i-upload" /></svg></span>
+        <strong id="drop-title" data-t="drop.start"></strong>
+        <span id="drop-detail" data-t="drop.detail"></span>
+      </div>
+    </div>
+
+    <!-- One-click setup -->
+    <div class="overlay" id="setup" hidden>
+      <div class="setup" role="dialog" aria-modal="true" aria-labelledby="setup-title">
+        <div class="setup-hero">
+          <img src="logo.png" alt="" class="setup-logo" />
+          <div>
+            <h2 id="setup-title" data-t="setup.title.ready"></h2>
+            <p id="setup-lead" data-t="setup.lead.needed"></p>
+          </div>
+        </div>
+
+        <ul class="reqs" id="setup-reqs">
+          <li data-req="steamcmd">
+            <span class="req-icon"><svg class="ok"><use href="#i-check" /></svg><svg class="bad"><use href="#i-x" /></svg></span>
+            <div><strong data-t="setup.req.steamcmd"></strong><span class="req-note"></span></div>
+          </li>
+          <li data-req="server">
+            <span class="req-icon"><svg class="ok"><use href="#i-check" /></svg><svg class="bad"><use href="#i-x" /></svg></span>
+            <div><strong data-t="setup.req.server"></strong><span class="req-note"></span></div>
+          </li>
+        </ul>
+
+        <div class="setup-options" id="setup-options">
+          <p class="setup-live-note" id="setup-live-note" hidden data-t="setup.liveNote"></p>
+          <div class="opt-row" id="setup-branch-row">
+            <span class="opt-label" data-t="common.branch"></span>
+            <select id="setup-branch" data-size="sm" data-t-label="common.branch"></select>
+          </div>
+          <div class="opt-row">
+            <span class="opt-label" data-t="common.modFramework"></span>
+            <div class="segmented" role="radiogroup" data-t-label="common.modFramework" id="setup-framework">
+              <button type="button" role="radio" data-value="none" data-t="framework.none"></button>
+              <button type="button" role="radio" data-value="carbon" data-t="framework.carbon"></button>
+              <button type="button" role="radio" data-value="oxide" data-t="framework.oxide"></button>
+            </div>
+          </div>
+          <label class="check" id="setup-owner-row">
+            <input type="checkbox" id="setup-owner" />
+            <span class="box"><svg><use href="#i-check" /></svg></span>
+            <span><span data-t="setup.owner"></span> <em data-t="setup.owner.note"></em></span>
+          </label>
+          <div class="owner-field" id="setup-owner-field" hidden>
+            <div class="owner-row">
+              <input class="text-input" id="setup-owner-id" data-t-placeholder="setup.owner.placeholder" spellcheck="false" autocomplete="off" />
+              <button class="btn btn-small btn-ghost" type="button" id="setup-owner-detect" data-t-title="setup.owner.detect.title"><svg><use href="#i-search" /></svg><span data-t="setup.owner.detect"></span></button>
+            </div>
+            <div class="owner-accounts" id="setup-owner-accounts" hidden></div>
+            <div class="owner-hint" id="setup-owner-hint"></div>
+          </div>
+          <hr class="opt-sep" />
+          <label class="check" id="setup-rustedit-row">
+            <input type="checkbox" id="setup-rustedit" checked />
+            <span class="box"><svg><use href="#i-check" /></svg></span>
+            <span><span data-t="setup.rustedit"></span> <em data-t="setup.rustedit.note"></em></span>
+          </label>
+          <label class="check" id="setup-playtest-row">
+            <input type="checkbox" id="setup-playtest" />
+            <span class="box"><svg><use href="#i-check" /></svg></span>
+            <span><span data-t="plugin.add"></span> <em data-t="setup.plugin.note"></em></span>
+          </label>
+          <hr class="opt-sep" />
+          <label class="check" id="setup-whitelist-row">
+            <input type="checkbox" id="setup-whitelist" checked />
+            <span class="box"><svg><use href="#i-check" /></svg></span>
+            <span><span data-t="setup.whitelist"></span> <em id="setup-whitelist-note" data-t="setup.whitelist.note"></em></span>
+          </label>
+          <label class="check" id="setup-backup-row">
+            <input type="checkbox" id="setup-backup" checked />
+            <span class="box"><svg><use href="#i-check" /></svg></span>
+            <span><span data-t="setup.backup"></span> <em data-t="setup.backup.note"></em></span>
+          </label>
+          <hr class="opt-sep" />
+          <label class="check" id="setup-profiler-row" hidden>
+            <input type="checkbox" id="setup-profiler" />
+            <span class="box"><svg><use href="#i-check" /></svg></span>
+            <span><span data-t="setup.profiler"></span> <em data-t="setup.profiler.note"></em></span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="setup-start" checked />
+            <span class="box"><svg><use href="#i-check" /></svg></span>
+            <span id="setup-start-label"><span data-t="setup.start"></span> <em data-t="setup.start.note"></em></span>
+          </label>
+          <label class="check check-sub" id="setup-prefab-row" hidden>
+            <input type="checkbox" id="setup-prefab" />
+            <span class="box"><svg><use href="#i-check" /></svg></span>
+            <span><span data-t="setup.prefab"></span> <em data-t="setup.prefab.note"></em></span>
+          </label>
+        </div>
+
+        <ol class="tasks" id="setup-tasks" hidden>
+          <li data-task="steamcmd"><span class="task-icon"></span><div class="task-body"><div class="task-title" data-t="setup.task.steamcmd"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>
+          <li data-task="server"><span class="task-icon"></span><div class="task-body"><div class="task-title" data-t="setup.task.server"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>
+          <li data-task="framework"><span class="task-icon"></span><div class="task-body"><div class="task-title" id="task-framework-title" data-t="common.modFramework"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>
+          <li data-task="startfile"><span class="task-icon"></span><div class="task-body"><div class="task-title" data-t="setup.task.startfile"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>
+          <li data-task="launch"><span class="task-icon"></span><div class="task-body"><div class="task-title" id="task-launch-title" data-t="setup.task.launch"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>
+        </ol>
+        <div class="setup-log" id="setup-log" hidden></div>
+
+        <div class="setup-result" id="setup-result" hidden>
+          <span class="result-icon"><svg id="setup-result-svg"><use href="#i-check" /></svg></span>
+          <div>
+            <strong id="setup-result-title"></strong>
+            <span id="setup-result-detail"></span>
+          </div>
+        </div>
+
+        <div class="setup-actions" id="setup-actions">
+          <button class="btn btn-link" id="setup-later" data-t="setup.later"></button>
+          <span class="spacer"></span>
+          <button class="btn btn-danger" id="setup-cancel" hidden><svg><use href="#i-x" /></svg><span data-t="common.cancel"></span></button>
+          <button class="btn btn-primary btn-lg" id="setup-fix"><svg><use href="#i-wrench" /></svg><span id="setup-fix-label" data-t="setup.fix"></span></button>
+          <button class="btn btn-primary btn-lg countdown" id="setup-close" hidden><span id="setup-close-label" data-t="setup.continue"></span><i class="countdown-bar" id="setup-countdown"></i></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- First start: what DropLaunch does, then setup -->
+    <div class="overlay" id="welcome" hidden>
+      <div class="setup welcome" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+        <div class="setup-hero">
+          <img src="logo.png" alt="" class="setup-logo" />
+          <div>
+            <h2 id="welcome-title" data-t="welcome.title"></h2>
+            <p data-t="welcome.sub"></p>
+          </div>
+        </div>
+        <button class="welcome-card" id="welcome-host">
+          <span class="welcome-art" aria-hidden="true"><svg><use href="#i-server" /></svg></span>
+          <span class="welcome-icon"><svg><use href="#i-server" /></svg></span>
+          <span class="welcome-content">
+            <strong data-t="welcome.setUp"></strong>
+            <!-- The downloads say whether there's room for them (app.js, renderWelcome) -->
+            <span class="welcome-facts">
+              <span id="welcome-steamcmd"><svg><use href="#i-download" /></svg><span data-t="welcome.steamcmd"></span></span>
+              <span id="welcome-server"><svg><use href="#i-download" /></svg><span></span></span>
+              <!-- The folders it makes, and a word when it isn't in a folder of its own -->
+              <span id="welcome-folders" hidden></span>
+              <span id="welcome-place" class="warn" hidden></span>
+            </span>
+          </span>
+          <span class="welcome-go"><span data-t="welcome.go"></span><svg><use href="#i-arrow-right" /></svg></span>
+        </button>
+        <label class="check welcome-guide">
+          <input type="checkbox" id="welcome-guide" checked />
+          <span class="box"><svg><use href="#i-check" /></svg></span>
+          <span><b data-t="welcome.guide"></b> <em data-t="welcome.guide.note"></em></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Settings: a page over the whole window, a tab for each kind (settings.js builds them) -->
+    <div class="settings-page" id="settings" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+      <header class="settings-head">
+        <button class="btn btn-small btn-ghost back-btn" id="settings-close" data-t-title="common.backEsc"><svg><use href="#i-arrow-left" /></svg><span data-t="common.back"></span></button>
+        <span class="settings-icon"><svg><use href="#i-gear" /></svg></span>
+        <h2 id="settings-title" data-t="settings.title"></h2>
+      </header>
+      <div class="settings-frame">
+        <nav class="settings-nav" id="settings-nav" role="tablist" aria-orientation="vertical" data-t-label="settings.nav"></nav>
+        <div class="settings-content" id="settings-body"></div>
+      </div>
+    </div>
+
+    <!-- A new DropLaunch is available -->
+    <div class="overlay" id="app-update" hidden>
+      <div class="setup app-update" role="dialog" aria-modal="true" aria-labelledby="app-update-title">
+        <div class="setup-hero">
+          <img src="logo.png" alt="" class="setup-logo" />
+          <div>
+            <h2 id="app-update-title" data-t="update.title"></h2>
+            <p id="app-update-sub"></p>
+          </div>
+        </div>
+        <div class="app-update-notes" id="app-update-notes"></div>
+        <p class="app-update-note" id="app-update-note"></p>
+        <div class="app-update-progress" id="app-update-progress" hidden>
+          <div class="bar" id="app-update-bar"><div class="bar-fill" id="app-update-fill"></div></div>
+          <span id="app-update-status"></span>
+        </div>
+        <div class="setup-actions">
+          <label class="check" id="app-update-skip-row" data-t-title="update.skip.title">
+            <input type="checkbox" id="app-update-skip" />
+            <span class="box"><svg><use href="#i-check" /></svg></span>
+            <span data-t="update.skip"></span>
+          </label>
+          <span class="spacer"></span>
+          <button class="btn btn-ghost" id="app-update-later" data-t="update.later"></button>
+          <button class="btn btn-primary" id="app-update-go"><svg><use href="#i-download" /></svg><span id="app-update-go-label" data-t="update.button"></span></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Playtest: bug reports testers send with /bug in Rust's chat, on a picture of the map -->
+    <section class="pt-page" id="playtest" hidden aria-labelledby="pt-title">
+      <header class="pt-top">
+        <button class="btn btn-small btn-ghost" id="pt-back" data-t-title="common.backEsc"><svg><use href="#i-arrow-left" /></svg><span data-t="common.back"></span></button>
+        <div class="pt-heading">
+          <h2 id="pt-title" data-t="playtest.title"></h2>
+          <div class="pt-chips" id="pt-chips"></div>
+        </div>
+        <label class="check pt-toggle" data-t-title="plugin.title"><input type="checkbox" id="pt-enabled" /><span class="box"><svg><use href="#i-check" /></svg></span><span data-t="playtest.enabled"></span></label>
+        <button class="btn btn-small btn-ghost" id="pt-export" data-t-title="playtest.export.title"><svg><use href="#i-download" /></svg><span data-t="playtest.export"></span></button>
+      </header>
+      <div class="pt-body">
+        <section class="card pt-map-card">
+          <div class="pt-map-wrap" id="pt-map-wrap"></div>
+          <div class="pt-legend">
+            <span class="pt-key open" data-t="playtest.key.open"></span>
+            <span class="pt-key fixed" data-t="playtest.key.fixed"></span>
+            <span class="pt-key tester" data-t="playtest.key.tester"></span>
+            <span class="spacer"></span>
+            <label class="check" id="pt-names-row" hidden data-t-title="playtest.names.title"><input type="checkbox" id="pt-show-names" /><span class="box"><svg><use href="#i-check" /></svg></span><span data-t="map.names"></span></label>
+            <label class="check"><input type="checkbox" id="pt-show-grid" /><span class="box"><svg><use href="#i-check" /></svg></span><span data-t="map.grid"></span></label>
+            <label class="check" data-t-title="playtest.trails.title"><input type="checkbox" id="pt-show-trails" /><span class="box"><svg><use href="#i-check" /></svg></span><span data-t="playtest.trails"></span></label>
+          </div>
+        </section>
+        <section class="card pt-list-card">
+          <div class="pt-list-head">
+            <div class="pt-list-title">
+              <h3 data-t="playtest.reports"></h3>
+              <p class="sub" id="pt-count"></p>
+            </div>
+            <div class="seg" id="pt-filter" role="tablist" data-t-label="playtest.filter.label">
+              <button role="tab" data-filter="all"><span data-t="playtest.filter.all"></span><b></b></button><button role="tab" data-filter="open"><span data-t="playtest.filter.open"></span><b></b></button><button role="tab" data-filter="fixed"><span data-t="playtest.filter.fixed"></span><b></b></button>
+            </div>
+          </div>
+          <div class="pt-status" id="pt-status" hidden></div>
+          <div class="pt-list" id="pt-list"></div>
+          <p class="pt-howto" id="pt-howto" data-t="playtest.howto"></p>
+        </section>
+      </div>
+    </section>
+
+    <!-- A map's picture, big, with zoom (from its icon in the map list) -->
+    <div class="overlay" id="map-viewer" hidden>
+      <div class="mv" role="dialog" aria-modal="true" aria-labelledby="mv-title">
+        <div class="mv-head">
+          <button class="btn btn-small btn-ghost back-btn" id="mv-close" data-t-title="common.backEsc"><svg><use href="#i-arrow-left" /></svg><span data-t="common.back"></span></button>
+          <div class="mv-heading">
+            <h2 id="mv-title" data-t="mapview.title"></h2>
+            <p class="sub" id="mv-sub"></p>
+          </div>
+          <label class="check" id="mv-names-row" hidden data-t-title="mapview.names.title"><input type="checkbox" id="mv-names" /><span class="box"><svg><use href="#i-check" /></svg></span><span data-t="map.names"></span></label>
+          <label class="check"><input type="checkbox" id="mv-grid" /><span class="box"><svg><use href="#i-check" /></svg></span><span data-t="map.grid"></span></label>
+          <label class="check" id="mv-reports-row" hidden data-t-title="mapview.reports.title"><input type="checkbox" id="mv-reports" /><span class="box"><svg><use href="#i-check" /></svg></span><span id="mv-reports-label" data-t="playtest.reports"></span></label>
+        </div>
+        <div class="mv-map" id="mv-map-wrap"></div>
+        <div class="mv-foot">
+          <span class="pt-key open" id="mv-key-open" data-t="playtest.key.open"></span>
+          <span class="pt-key fixed" id="mv-key-fixed" data-t="playtest.key.fixed"></span>
+          <span class="spacer"></span>
+          <span data-t="mapview.help"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- About: the version, and the libraries DropLaunch is made with (their notices and licenses) -->
+    <div class="overlay" id="about" hidden>
+      <div class="setup about" role="dialog" aria-modal="true" aria-labelledby="about-title">
+        <button class="btn btn-small btn-ghost back-btn" id="about-close" data-t-title="common.backEsc"><svg><use href="#i-arrow-left" /></svg><span data-t="common.back"></span></button>
+        <div class="setup-hero">
+          <img src="logo.png" alt="" class="setup-logo" />
+          <div>
+            <h2 id="about-title">DropLaunch</h2>
+            <p id="about-sub"></p>
+          </div>
+        </div>
+        <h3 class="about-h" data-t="about.madeWith"></h3>
+        <p class="about-text" id="about-intro" data-t="about.intro"></p>
+        <input class="text-input about-search" id="about-search" data-t-placeholder="about.search" data-t-label="about.search" spellcheck="false" autocomplete="off" />
+        <div class="about-list" id="about-list" role="list"></div>
+        <h3 class="about-h" data-t="about.downloaded"></h3>
+        <p class="about-text" data-t="about.downloadedText"></p>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="modal" hidden>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <h3 id="modal-title"></h3>
+        <p id="modal-text"></p>
+        <div class="modal-actions" id="modal-actions"></div>
+      </div>
+    </div>
+    <div class="toast" id="toast" hidden></div>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,75 @@
+{
+  "droplaunchKit": 1,
+  "id": "701d3973-7cf3-4060-9276-9920cfbf4118",
+  "name": "Basic Build Kit",
+  "wear": [],
+  "belt": [
+    {
+      "item": "building.planner",
+      "amount": 1,
+      "slot": 0
+    },
+    {
+      "item": "hammer",
+      "amount": 1,
+      "slot": 1
+    },
+    {
+      "item": "lock.code",
+      "amount": 99999,
+      "slot": 2
+    }
+  ],
+  "main": [
+    {
+      "item": "wood",
+      "amount": 99999,
+      "slot": 0
+    },
+    {
+      "item": "stones",
+      "amount": 99999,
+      "slot": 1
+    },
+    {
+      "item": "metal.fragments",
+      "amount": 99999,
+      "slot": 2
+    },
+    {
+      "item": "metal.refined",
+      "amount": 99999,
+      "slot": 3
+    },
+    {
+      "item": "door.hinged.toptier",
+      "amount": 9999,
+      "slot": 4
+    },
+    {
+      "item": "door.hinged.metal",
+      "amount": 99999,
+      "slot": 5
+    },
+    {
+      "item": "wall.frame.garagedoor",
+      "amount": 99999,
+      "slot": 6
+    },
+    {
+      "item": "door.double.hinged.metal",
+      "amount": 99999,
+      "slot": 7
+    },
+    {
+      "item": "cupboard.tool",
+      "amount": 999,
+      "slot": 8
+    },
+    {
+      "item": "furnace",
+      "amount": 9999,
+      "slot": 9
+    }
+  ]
+}

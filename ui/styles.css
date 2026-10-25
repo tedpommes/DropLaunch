@@ -1,0 +1,8380 @@
+/* DropLaunch v2 - colours taken from droplaunch.gg */
+:root {
+  --bg: #1e2028;
+  --bg-deep: #1c1b1f;
+  --card: #2a2c35;
+  --inset: #23252d;
+  --console: #17181d;
+  --line: rgba(255, 255, 255, 0.06);
+  --line-strong: rgba(255, 255, 255, 0.12);
+  --text: #b2b7bf;
+  --text-strong: #eef0f4;
+  --muted: #80868f;
+  --faint: #5d626b;
+  --accent: #7a95e3;
+  --accent-hover: #8ca4ea;
+  --accent-soft: rgba(122, 149, 227, 0.14);
+  --ok: #4cc38a;
+  --ok-soft: rgba(76, 195, 138, 0.12);
+  --warn: #e6b450;
+  --danger: #ef6a62;
+  --danger-soft: rgba(239, 106, 98, 0.12);
+  /* Who wrote a console line; the boot steps use the same colours. Muted on purpose. */
+  --src-server: #a9b0bc;
+  --src-map: #93c49a;
+  --src-carbon: #e2a174;
+  --src-oxide: #b7a0e8;
+  --src-rustedit: #dc98bb;
+  --src-rcon: #6fc0d2;
+  --src-droplaunch: #8ea5ea;
+  --src-steamcmd: #86b2d6;
+  --radius: 14px;
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Ubuntu, "Noto Sans", sans-serif;
+  --mono: "Cascadia Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+}
+
+svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+code {
+  font: 12px var(--mono);
+  color: var(--text-strong);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ---------- top bar ---------- */
+.topbar {
+  flex: none;
+  height: 60px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 0 22px;
+  background: var(--bg-deep);
+  border-bottom: 1px solid var(--line);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -4px rgba(0, 0, 0, 0.1);
+  z-index: 2;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-logo {
+  width: 32px;
+  height: 32px;
+}
+
+.brand-name {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text-strong);
+  letter-spacing: -0.01em;
+}
+
+.tag {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 3px 9px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+
+.pills {
+  grid-column: 3;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+  font-family: var(--font);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.pill:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--line-strong);
+}
+
+.pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pill i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.pill.ok i {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px rgba(76, 195, 138, 0.18);
+}
+
+.pill.warn i {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px rgba(230, 180, 80, 0.18);
+}
+
+/* ---------- layout ---------- */
+.layout {
+  /* Grows with big windows (full screen) until it's dragged to a width of its own. */
+  --side-default: clamp(340px, 24vw, 600px);
+  --side-gap: 18px;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  /* main | splitter | side (its width is draggable, never more than half) */
+  grid-template-columns: minmax(0, 1fr) var(--side-gap) min(var(--side-w, var(--side-default)), 50%);
+  gap: 18px 0;
+  padding: 18px 22px;
+}
+
+.col-main,
+.col-side {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+}
+
+.col-side {
+  overflow-y: auto;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.card h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text-strong);
+}
+
+.sub {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.badge {
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #1e2028;
+  background: var(--warn);
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+
+/* ---------- facts ---------- */
+.facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 16px;
+}
+
+.facts > div {
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.facts dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+
+.facts dd {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fact-note {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fact-note.warn {
+  color: var(--warn);
+}
+
+.facts > div.has-update {
+  border-color: rgba(230, 180, 80, 0.35);
+  background: linear-gradient(rgba(230, 180, 80, 0.06), rgba(230, 180, 80, 0.06)), var(--inset);
+}
+
+/* ---------- controls ---------- */
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font: 600 13.5px var(--font);
+  color: var(--text-strong);
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.05s;
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn:focus-visible,
+.log:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 700;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-ghost {
+  border-color: var(--line-strong);
+  color: #d6dae1;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.btn-danger {
+  border-color: rgba(239, 106, 98, 0.45);
+  color: #ff948d;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+.btn-small {
+  height: 28px;
+  padding: 0 11px;
+  font-size: 12px;
+  gap: 6px;
+}
+
+.btn-small svg {
+  width: 14px;
+  height: 14px;
+}
+
+.btn-block {
+  width: 100%;
+  margin-top: 14px;
+}
+
+/* ---------- progress ---------- */
+.progress {
+  margin-top: 16px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+
+.steps {
+  list-style: none;
+  display: flex;
+  margin: 0 0 16px;
+  padding: 0;
+}
+
+.steps li {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--faint);
+}
+
+.steps li:not(:last-child)::after {
+  content: "";
+  flex: 1;
+  height: 2px;
+  margin: 0 10px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+
+.step-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+.step-dot svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 3;
+  opacity: 0;
+}
+
+.steps li.active {
+  color: var(--text-strong);
+}
+
+.steps li.active .step-dot {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.steps li.done {
+  color: var(--text);
+}
+
+.steps li.done .step-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.steps li.done .step-dot svg {
+  opacity: 1;
+}
+
+.steps li.done::after {
+  background: var(--accent);
+}
+
+.steps li.error {
+  color: var(--danger);
+}
+
+.steps li.error .step-dot {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+@keyframes pulse {
+  50% {
+    box-shadow: 0 0 0 7px rgba(122, 149, 227, 0.05);
+  }
+}
+
+.progress-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+#p-text {
+  font-size: 14.5px;
+  font-weight: 650;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#p-pct {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.bar {
+  position: relative;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6d89dc, #9fb3f0);
+  transition: width 0.5s ease;
+}
+
+.bar.indeterminate .bar-fill {
+  width: 35% !important;
+  animation: slide 1.3s ease-in-out infinite;
+}
+
+.bar.failed .bar-fill {
+  background: var(--danger);
+}
+
+.bar.complete .bar-fill {
+  background: linear-gradient(90deg, #3fae7b, #5fd59b);
+}
+
+@keyframes slide {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-height: 18px;
+}
+
+/* ---------- result ---------- */
+.result {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(76, 195, 138, 0.28);
+  background: var(--ok-soft);
+}
+
+.result-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(76, 195, 138, 0.2);
+  color: var(--ok);
+  flex: none;
+}
+
+.result-icon svg {
+  stroke-width: 2.6;
+}
+
+.result-text strong {
+  display: block;
+  color: var(--text-strong);
+  font-size: 14px;
+}
+
+.result-text span {
+  font-size: 12.5px;
+  color: var(--text);
+  word-break: break-word;
+  user-select: text;
+}
+
+.result.failed {
+  border-color: rgba(239, 106, 98, 0.32);
+  background: var(--danger-soft);
+}
+
+.result.failed .result-icon {
+  background: rgba(239, 106, 98, 0.2);
+  color: var(--danger);
+}
+
+.result.neutral {
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.result.neutral .result-icon {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.result.info {
+  border-color: rgba(122, 149, 227, 0.3);
+  background: var(--accent-soft);
+}
+
+.result.info .result-icon {
+  background: rgba(122, 149, 227, 0.22);
+  color: var(--accent);
+}
+
+/* ---------- log ---------- */
+.log-card {
+  flex: 1;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+}
+
+.log-card .card-head {
+  margin-bottom: 10px;
+  align-items: center;
+}
+
+.log-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.log-tools {
+  display: flex;
+  gap: 8px;
+}
+
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ok);
+}
+
+.live i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  animation: blink 1.1s ease-in-out infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.log {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--console);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font: 12.5px/1.6 var(--mono);
+  color: #c4c9d1;
+  user-select: text;
+}
+
+.log-empty {
+  font-family: var(--font);
+  color: var(--faint);
+  padding: 6px 0;
+}
+
+.ln {
+  display: flex;
+  gap: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ln .t {
+  flex: none;
+  color: var(--faint);
+}
+
+.ln.app .m {
+  color: var(--accent);
+}
+
+.ln.error .m {
+  color: var(--danger);
+}
+
+.ln.ok .m {
+  color: var(--ok);
+}
+
+.log::-webkit-scrollbar,
+.col-side::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.log::-webkit-scrollbar-thumb,
+.col-side::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.log::-webkit-scrollbar-track,
+.col-side::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------- folders ---------- */
+.folders {
+  display: flex;
+  flex-direction: column;
+}
+
+.folder {
+  padding: 11px 0;
+  border-top: 1px solid var(--line);
+}
+
+.folder:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.folder-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.folder-label {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-strong);
+}
+
+.folder-state {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.folder-state.ok {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.folder-path {
+  margin-top: 4px;
+  font: 11.5px/1.4 var(--mono);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.icon-btn {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--line-strong);
+  color: var(--text-strong);
+}
+
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.icon-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ---------- footer, modal, toast ---------- */
+.footer {
+  flex: none;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 22px 12px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+.footer span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 11, 14, 0.6);
+  z-index: 10;
+}
+
+.modal {
+  width: min(440px, calc(100vw - 32px));
+  background: var(--card);
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  padding: 22px 22px 18px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+.modal h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  color: var(--text-strong);
+}
+
+.modal p {
+  margin: 0 0 20px;
+  color: var(--text);
+  /* Release notes and other multi-line texts keep their lines. */
+  white-space: pre-line;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.modal-actions .btn {
+  flex: none;
+}
+
+/* Three choices get the room for them. */
+.modal:has(.modal-actions > :nth-child(3)) {
+  width: min(540px, calc(100vw - 32px));
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  top: 70px;
+  transform: translateX(-50%);
+  max-width: min(560px, calc(100vw - 32px));
+  background: #34363f;
+  color: var(--text-strong);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  padding: 10px 16px;
+  font-size: 13px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+  z-index: 11;
+}
+
+/* ---------- setup banner + test server card ---------- */
+.setup-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(230, 180, 80, 0.35);
+  background: rgba(230, 180, 80, 0.1);
+}
+
+.setup-banner > svg {
+  width: 20px;
+  height: 20px;
+  color: var(--warn);
+}
+
+.setup-banner div {
+  flex: 1;
+  font-size: 12.5px;
+}
+
+.setup-banner strong {
+  display: block;
+  color: var(--text-strong);
+  font-size: 13.5px;
+}
+
+.kv {
+  margin: 0 0 14px;
+  display: grid;
+  gap: 8px;
+}
+
+.kv > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12.5px;
+}
+
+.kv dt {
+  color: var(--muted);
+}
+
+.kv dd {
+  margin: 0;
+  color: var(--text-strong);
+  font-weight: 600;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kv dd.missing {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* ---------- setup window ---------- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(12, 13, 17, 0.72);
+  backdrop-filter: blur(3px);
+  z-index: 9;
+  animation: fade-in 0.18s ease-out;
+}
+
+.setup {
+  width: min(720px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--line-strong);
+  border-radius: 18px;
+  padding: 20px 24px 18px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
+  animation: pop-in 0.22s ease-out;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+}
+
+.setup-hero {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+/* First start: the logo and the question centred on top. */
+.welcome .setup-hero {
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+  text-align: center;
+}
+
+.setup-logo {
+  width: 54px;
+  height: 54px;
+  flex: none;
+}
+
+.setup h2 {
+  margin: 0 0 4px;
+  font-size: 20px;
+  color: var(--text-strong);
+}
+
+.setup-hero p {
+  margin: 0;
+  color: var(--text);
+}
+
+.reqs {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.reqs li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px;
+  border-radius: 12px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+}
+
+.reqs strong {
+  display: block;
+  color: var(--text-strong);
+  font-size: 13.5px;
+}
+
+.req-note {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.req-icon {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+}
+
+.req-icon svg {
+  width: 15px;
+  height: 15px;
+  stroke-width: 3;
+}
+
+.reqs li.ok .req-icon {
+  background: rgba(76, 195, 138, 0.18);
+  color: var(--ok);
+}
+
+.reqs li.missing .req-icon {
+  background: rgba(239, 106, 98, 0.16);
+  color: var(--danger);
+}
+
+.reqs li.ok .bad,
+.reqs li.missing .ok {
+  display: none;
+}
+
+.setup-options {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.opt-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.opt-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  gap: 3px;
+  border-radius: 999px;
+  background: var(--inset);
+  border: 1px solid var(--line-strong);
+}
+
+.segmented button {
+  border: 0;
+  border-radius: 999px;
+  padding: 5px 14px;
+  font: 600 12.5px var(--font);
+  color: var(--text);
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.segmented button:hover {
+  color: var(--text-strong);
+}
+
+.segmented button[aria-checked="true"] {
+  background: var(--accent);
+  color: #fff;
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.check input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.check .box {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  margin-top: 1px;
+  border-radius: 5px;
+  border: 2px solid var(--line-strong);
+  display: grid;
+  place-items: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.check .box svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 3.2;
+  color: #fff;
+  opacity: 0;
+}
+
+.check input:checked + .box {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.check input:checked + .box svg {
+  opacity: 1;
+}
+
+.check input:focus-visible + .box {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* An option that belongs to the one above it. */
+.check.check-sub {
+  margin-left: 28px;
+}
+
+.check.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.check em {
+  color: var(--muted);
+  font-style: normal;
+}
+
+/* A download's size: green with room on its drive, red without (util.js, sizeTag). */
+.size-tag.room {
+  color: var(--ok);
+}
+
+.size-tag.no-room {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* ---------- branches: each installed one has its own folder ---------- */
+.maps-branch .dd-btn {
+  height: 32px;
+}
+
+/* A narrow maps card: the title keeps its room, the tools get smaller. */
+.maps-card {
+  container: maps / inline-size;
+}
+
+.maps-title {
+  flex: 1 1 auto;
+  min-width: 90px;
+}
+
+@container maps (max-width: 660px) {
+  .maps-branch .dd-label {
+    display: none;
+  }
+
+  .maps-card .search {
+    width: 150px;
+  }
+}
+
+@container maps (max-width: 520px) {
+  .maps-card .search {
+    width: 118px;
+  }
+}
+
+.installs {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.installs-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.install {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 8px 8px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--inset);
+  font-size: 12.5px;
+}
+
+.install.active {
+  border-color: rgba(122, 149, 227, 0.4);
+  background: var(--accent-soft);
+}
+
+.install strong {
+  flex: none;
+  color: var(--text-strong);
+}
+
+.install .chip {
+  flex: none;
+}
+
+.install-meta {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.install-meta.warn {
+  color: var(--warn);
+}
+
+.install-path {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.install .btn,
+.install .icon-btn {
+  flex: none;
+}
+
+.tasks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.tasks li {
+  display: flex;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  transition: background 0.2s;
+}
+
+.tasks li.active {
+  background: var(--inset);
+}
+
+/* Under the options while the files download: tighter, so the window doesn't scroll. */
+.tasks.compact {
+  gap: 0;
+}
+
+.tasks.compact li {
+  padding-block: 4px;
+}
+
+.task-icon {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  margin-top: 1px;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+}
+
+.tasks li.active .task-icon {
+  border-color: var(--accent-soft);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+
+.tasks li.done .task-icon {
+  border-color: var(--ok);
+  background: var(--ok);
+}
+
+.tasks li.done .task-icon::after,
+.tasks li.failed .task-icon::after,
+.tasks li.skipped .task-icon::after {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font: 800 12px/1 var(--font);
+  color: #fff;
+}
+
+.tasks li.done .task-icon::after {
+  content: "✓";
+}
+
+.tasks li.failed .task-icon {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.tasks li.failed .task-icon::after {
+  content: "!";
+}
+
+.tasks li.skipped .task-icon::after {
+  content: "–";
+  color: var(--faint);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.task-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.task-title {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--faint);
+}
+
+.tasks li.active .task-title,
+.tasks li.done .task-title,
+.tasks li.failed .task-title {
+  color: var(--text-strong);
+}
+
+.task-detail {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+}
+
+.tasks li.failed .task-detail {
+  color: #ff948d;
+}
+
+.task-bar {
+  display: none;
+  height: 5px;
+  margin-top: 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.task-bar div {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #6d89dc, #9fb3f0);
+  transition: width 0.5s ease;
+}
+
+.tasks li.active.measured .task-bar {
+  display: block;
+}
+
+.setup-log {
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--console);
+  border: 1px solid var(--line);
+  font: 11.5px/1.55 var(--mono);
+  color: #9aa1ab;
+  height: calc(5 * 1.55em + 16px);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.setup-log div {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.setup-result {
+  display: flex;
+  gap: 14px;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(76, 195, 138, 0.28);
+  background: var(--ok-soft);
+}
+
+.setup-result strong {
+  display: block;
+  font-size: 15px;
+  color: var(--text-strong);
+}
+
+.setup-result > div > span {
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.setup-result.failed {
+  border-color: rgba(239, 106, 98, 0.32);
+  background: var(--danger-soft);
+}
+
+.setup-result.failed .result-icon {
+  background: rgba(239, 106, 98, 0.2);
+  color: var(--danger);
+}
+
+.setup-result.neutral {
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.setup-result.neutral .result-icon {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.connect-hint {
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.connect-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.connect-row code {
+  font-size: 13px;
+  padding: 4px 8px;
+  user-select: text;
+}
+
+kbd {
+  font: 700 11px var(--mono);
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-strong);
+}
+
+.setup-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.btn-lg {
+  height: 42px;
+  padding: 0 22px;
+  font-size: 14.5px;
+}
+
+.btn-link {
+  padding: 0 4px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.btn-link:hover:not(:disabled) {
+  color: var(--text-strong);
+}
+
+/* The narrowest "more options" window (900 px): keep both columns, just a narrower side. */
+@media (max-width: 1000px) {
+  .layout {
+    --side-default: 300px;
+    --side-gap: 14px;
+    gap: 14px 0;
+    padding: 14px 16px;
+  }
+}
+
+/* ---------- tabs ---------- */
+.tabs {
+  justify-self: center;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line);
+}
+
+.tabs button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: 650 13.5px var(--font);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tabs button:hover {
+  color: var(--text-strong);
+}
+
+.tabs button[aria-selected="true"] {
+  background: var(--card);
+  color: var(--text-strong);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.tabs button[aria-selected="true"] svg {
+  color: var(--accent);
+}
+
+.tabs button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 3px rgba(230, 180, 80, 0.18);
+}
+
+/* ---------- coloured paths ---------- */
+.path {
+  font: 12px var(--mono);
+  color: #b4c5f5;
+  background: rgba(122, 149, 227, 0.12);
+  border: 1px solid rgba(122, 149, 227, 0.22);
+  padding: 0 6px;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.path-color {
+  color: #a3b6ee;
+}
+
+/* ---------- custom dropdown ---------- */
+.dd-native {
+  display: none !important;
+}
+
+.dd {
+  position: relative;
+  display: inline-flex;
+}
+
+.dd-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--inset);
+  color: var(--text-strong);
+  font: 600 13.5px var(--font);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.dd-sm .dd-btn {
+  height: 32px;
+  font-size: 13px;
+  min-width: 128px;
+}
+
+.dd-btn:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.dd-btn:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.dd.open .dd-btn {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.dd-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dd-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dd-value {
+  flex: 1;
+  text-align: left;
+}
+
+.dd-chevron {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+
+.dd.open .dd-chevron {
+  transform: rotate(180deg);
+}
+
+.dd-list {
+  position: fixed;
+  z-index: 30;
+  margin: 0;
+  padding: 5px;
+  list-style: none;
+  max-height: 300px;
+  overflow-y: auto;
+  background: #30323c;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  outline: none;
+  animation: dd-in 0.12s ease-out;
+}
+
+@keyframes dd-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.dd-list.above {
+  animation-name: dd-in-above;
+}
+
+@keyframes dd-in-above {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.dd-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px 7px 8px;
+  border-radius: 9px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dd-list li.active {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-strong);
+}
+
+.dd-list li.selected {
+  color: var(--text-strong);
+}
+
+.dd-check {
+  width: 14px;
+  height: 14px;
+  stroke-width: 3;
+  color: var(--accent);
+  visibility: hidden;
+}
+
+.dd-list li.selected .dd-check {
+  visibility: visible;
+}
+
+.dd-name {
+  flex: 1;
+}
+
+.dd-meta {
+  margin-left: 18px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- maps page ---------- */
+#view-maps .col-main {
+  overflow: hidden;
+}
+
+.maps-card {
+  flex: 1 1 56%;
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 12px;
+}
+
+.maps-card .card-head {
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.maps-title {
+  min-width: 0;
+}
+
+.maps-title .sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.maps-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  width: 210px;
+  padding: 0 12px;
+  margin-right: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--inset);
+  color: var(--muted);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.search svg {
+  width: 15px;
+  height: 15px;
+}
+
+.search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-strong);
+  font: 13px var(--font);
+}
+
+.search input::-webkit-search-cancel-button {
+  filter: invert(0.6);
+}
+
+.icon-btn.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.map-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -8px;
+  padding: 0 8px;
+  outline: none;
+}
+
+.map-list:focus-visible .map-row.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.map-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 5px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--faint);
+}
+
+.map-group:first-child {
+  padding-top: 0;
+}
+
+.map-count {
+  font-size: 10.5px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--muted);
+}
+
+.map-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 8px 7px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: default;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.map-row:hover {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.map-row.selected {
+  background: var(--accent-soft);
+  border-color: rgba(122, 149, 227, 0.32);
+}
+
+.map-icon {
+  width: 32px;
+  height: 32px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+}
+
+.map-icon.procgen {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.map-row.selected .map-icon:not(.procgen) {
+  color: var(--accent);
+  background: rgba(122, 149, 227, 0.18);
+}
+
+.map-icon.big {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+}
+
+.map-icon.big svg {
+  width: 21px;
+  height: 21px;
+}
+
+.map-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.map-name {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.map-folder {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.map-size,
+.map-date {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.map-size {
+  width: 64px;
+}
+
+.map-date {
+  width: 96px;
+}
+
+.chip {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.chip-run {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.row-play,
+.row-forget {
+  flex: none;
+}
+
+.row-play {
+  color: var(--accent);
+  opacity: 0.55;
+}
+
+.map-row:hover .row-play,
+.map-row.selected .row-play {
+  opacity: 1;
+}
+
+.row-play svg {
+  fill: currentColor;
+  stroke-width: 1.5;
+}
+
+.row-forget {
+  opacity: 0;
+}
+
+.map-row:hover .row-forget {
+  opacity: 1;
+}
+
+/* The row's buttons: as wide as three (forget, test with prefabs, start) in every row, so the
+   sizes and dates line up from group to group. */
+.row-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 96px;
+}
+
+.map-empty {
+  margin: 4px 0 8px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px dashed var(--line-strong);
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.map-empty strong {
+  color: var(--text-strong);
+}
+
+.drop-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--faint);
+}
+
+.drop-hint b {
+  color: var(--muted);
+}
+
+/* ---------- console ---------- */
+.console-card {
+  flex: 1 1 44%;
+  min-height: 190px;
+  display: flex;
+  flex-direction: column;
+}
+
+.console-card .card-head {
+  margin-bottom: 10px;
+  align-items: center;
+}
+
+.ln.warn .m {
+  color: var(--warn);
+}
+
+.ln.cmd .m {
+  color: var(--text-strong);
+  font-weight: 700;
+}
+
+.ln.reply .m {
+  color: #d9dde4;
+}
+
+.console-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 0 6px 0 12px;
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--console);
+  color: var(--faint);
+}
+
+.console-input:focus-within {
+  border-color: var(--accent);
+}
+
+.console-input input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-strong);
+  font: 12.5px var(--mono);
+}
+
+.console-input input:disabled::placeholder {
+  color: var(--faint);
+}
+
+/* The console's suggestions: above the command line, on top of everything. */
+.cc-list {
+  position: fixed;
+  z-index: 60;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  overflow-y: auto;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+.cc-item,
+.cc-hint {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.cc-item {
+  cursor: pointer;
+}
+
+.cc-item.active,
+.cc-item:hover {
+  background: var(--accent-soft);
+}
+
+.cc-item code,
+.cc-hint code {
+  flex: none;
+  padding: 0;
+  background: none;
+  font-size: 12.5px;
+  color: var(--text-strong);
+}
+
+.cc-item code b {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.cc-icon {
+  flex: none;
+  width: 13px;
+  align-self: center;
+  display: inline-flex;
+  color: var(--faint);
+}
+
+.cc-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
+.cc-help {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cc-src {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 650;
+  color: var(--src-carbon);
+  background: rgba(226, 161, 116, 0.12);
+}
+
+/* Typing the arguments: what the command does, in full. */
+.cc-hint {
+  flex-wrap: wrap;
+  line-height: 1.45;
+}
+
+.cc-hint span {
+  flex: 1 1 260px;
+}
+
+/* ---------- server panel ---------- */
+.server-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+}
+
+.status-row strong {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.status-time {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 55%;
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.status-dot.ok {
+  background: var(--ok);
+  box-shadow: 0 0 0 4px rgba(76, 195, 138, 0.18);
+}
+
+.status-dot.busy {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+  animation: blink 1.1s ease-in-out infinite;
+}
+
+.status-dot.bad {
+  background: var(--danger);
+  box-shadow: 0 0 0 4px var(--danger-soft);
+}
+
+.sel-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+}
+
+.sel-text {
+  min-width: 0;
+}
+
+.sel-name {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sel-meta {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-panel .kv {
+  margin: 0;
+}
+
+.kv dd.warn {
+  color: var(--warn);
+}
+
+.kv dd.mono {
+  font: 600 12px var(--mono);
+}
+
+.server-panel .check {
+  font-size: 12.5px;
+}
+
+.server-panel .btn-block {
+  margin-top: 0;
+}
+
+.sel-links {
+  display: flex;
+  gap: 8px;
+  margin-top: -4px;
+}
+
+.sel-links .btn {
+  flex: 1;
+}
+
+/* The server card's fold arrow (more options), at the end of its status row. */
+.status-row .srv-fold {
+  flex: none;
+  margin: -6px -8px -6px 0;
+}
+
+.status-time + .srv-fold {
+  margin-left: 0;
+}
+
+.status-row > strong + .srv-fold,
+.status-row > .srv-fold:only-of-type {
+  margin-left: auto;
+}
+
+.srv-fold svg {
+  transition: transform 0.15s;
+}
+
+.srv-fold[aria-expanded="false"] svg {
+  transform: rotate(-90deg);
+}
+
+/* The server's name, with small Restart and Stop next to it. */
+/* The name, then its buttons (on the next line when the column is narrow). */
+.srv-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: -4px 0 -10px;
+}
+
+.srv-title-row .srv-title {
+  flex: 1 1 120px;
+  min-width: 0;
+  margin: 0;
+}
+
+.srv-mini {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.srv-mini .btn {
+  height: 28px;
+  padding: 0 10px;
+}
+
+.srv-title {
+  margin: -4px 0 -10px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.srv-sub {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.srv-note {
+  margin-top: -6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.srv-message {
+  font-size: 12.5px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--line);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.srv-message.bad {
+  color: #ffb3ad;
+  border-color: rgba(239, 106, 98, 0.3);
+  background: var(--danger-soft);
+}
+
+.boot {
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+}
+
+.boot .progress-row {
+  margin-bottom: 8px;
+}
+
+.boot-stage {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text-strong);
+}
+
+.boot-pct {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.boot .bar-fill {
+  transition: width 0.6s ease;
+}
+
+.boot-detail {
+  margin-top: 7px;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.stat {
+  padding: 9px 6px;
+  border-radius: 10px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  text-align: center;
+  min-width: 0;
+}
+
+.stat b {
+  display: block;
+  font-size: 15px;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.stat span {
+  display: block;
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The server's numbers over the last minutes (graph.js), one at a time. */
+.perf {
+  display: grid;
+  gap: 8px;
+}
+
+.seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  justify-self: start;
+  max-width: 100%;
+  overflow-x: auto;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--inset);
+}
+
+.seg button {
+  flex: none;
+  height: 24px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: 600 11.5px var(--font);
+  cursor: pointer;
+}
+
+.seg button:hover {
+  color: var(--text-strong);
+}
+
+.seg button[aria-selected="true"] {
+  background: var(--accent-soft);
+  color: var(--text-strong);
+}
+
+.seg button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.join-row,
+.srv-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.join-row .btn,
+.srv-actions .btn {
+  min-width: 0;
+  padding: 0 10px;
+}
+
+.join-row .btn span,
+.srv-actions .btn span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.connect-line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: -6px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.connect-line code {
+  user-select: text;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* F1 -> the command: the arrow sits between the two like the step arrows elsewhere. */
+.connect-arrow {
+  flex: none;
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.connect-arrow svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* ---------- mods & scripts ---------- */
+.oxide-warning {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(230, 180, 80, 0.35);
+  background: rgba(230, 180, 80, 0.1);
+  font-size: 12px;
+}
+
+.oxide-warning > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--warn);
+}
+
+.oxide-warning strong {
+  display: block;
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.scripts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.script-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 6px 8px 10px;
+  border-radius: 10px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.script-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.script-text b {
+  font: 600 12px var(--mono);
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.script-text span {
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scripts-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---------- drop overlay ---------- */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: rgba(16, 17, 22, 0.78);
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+  animation: fade-in 0.12s ease-out;
+}
+
+.drop-box {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border-radius: 22px;
+  border: 2px dashed rgba(122, 149, 227, 0.7);
+  background: rgba(122, 149, 227, 0.07);
+  color: var(--text);
+}
+
+.drop-icon {
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 0 10px var(--accent-soft);
+  margin-bottom: 8px;
+}
+
+.drop-icon svg {
+  width: 28px;
+  height: 28px;
+  stroke-width: 2.4;
+}
+
+.drop-box strong {
+  font-size: 20px;
+  color: var(--text-strong);
+}
+
+.drop-overlay.nope .drop-box {
+  border-color: rgba(239, 106, 98, 0.6);
+  background: var(--danger-soft);
+}
+
+.drop-overlay.nope .drop-icon {
+  background: var(--danger);
+  box-shadow: 0 0 0 10px var(--danger-soft);
+}
+
+/* ---------- toasts ---------- */
+.toast.ok {
+  border-color: rgba(76, 195, 138, 0.45);
+}
+
+.toast.error {
+  border-color: rgba(239, 106, 98, 0.5);
+}
+
+.map-list::-webkit-scrollbar,
+.dd-list::-webkit-scrollbar {
+  width: 10px;
+}
+
+.map-list::-webkit-scrollbar-thumb,
+.dd-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+@media (max-width: 1000px) {
+  body:not(.simple) .map-date {
+    display: none;
+  }
+
+  .search {
+    width: 150px;
+  }
+}
+
+/* ---------- simple view ---------- */
+.view-toggle {
+  margin-left: 2px;
+}
+
+@media (max-width: 1060px) {
+  body:not(.simple) .tag,
+  body:not(.simple) .view-toggle span {
+    display: none;
+  }
+
+  body:not(.simple) .view-toggle {
+    padding: 0 9px;
+  }
+}
+
+@media (max-width: 720px) {
+  .tag {
+    display: none;
+  }
+}
+
+body.simple .tabs,
+body.simple .console-card,
+body.simple .footer {
+  display: none;
+}
+
+/* ---------- strip: server files that need something ---------- */
+.strip {
+  flex: none;
+  padding: 14px 16px;
+}
+
+.strip-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.strip-icon {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.strip.warn .strip-icon,
+.strip.update .strip-icon {
+  color: var(--warn);
+  background: rgba(230, 180, 80, 0.12);
+}
+
+.strip.update,
+.strip.warn {
+  border-color: rgba(230, 180, 80, 0.32);
+}
+
+.strip.done .strip-icon {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.strip-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.strip-text strong {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text-strong);
+}
+
+.strip-text span {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.strip-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-top: 8px;
+}
+
+/* Nothing to show in it: gone. */
+.strip-actions:not(:has(> :not([hidden]))) {
+  display: none;
+}
+
+/* "Also update Carbon" next to Update server files. */
+.strip-check {
+  align-items: center;
+  font-size: 12.5px;
+}
+
+.strip-check .box {
+  margin-top: 0;
+}
+
+.strip-text .strip-check-label {
+  display: inline;
+  overflow: visible;
+  font-size: 12.5px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.strip-row > .icon-btn {
+  flex: none;
+  margin: -4px -6px 0 0;
+}
+
+.strip-progress {
+  margin-top: 12px;
+}
+
+.strip-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.strip-meta span:first-child {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- prefab test mode ---------- */
+.prefab-start {
+  display: grid;
+  gap: 6px;
+  margin-top: -6px;
+}
+
+.prefab-start .btn svg {
+  color: var(--warn);
+}
+
+.prefab-note {
+  font-size: 11.5px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.row-prefab {
+  flex: none;
+  color: var(--warn);
+  opacity: 0;
+}
+
+.map-row:hover .row-prefab,
+.map-row.selected .row-prefab {
+  opacity: 0.85;
+}
+
+.map-row:hover .row-prefab:hover:not(:disabled) {
+  opacity: 1;
+}
+
+/* ---------- top bar: status + view toggle ---------- */
+.status-group {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  padding: 0 3px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.status-group .pill {
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+}
+
+.status-group .pill:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.status-group .pill + .pill {
+  position: relative;
+  margin-left: 1px;
+}
+
+.status-group .pill + .pill::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  background: var(--line-strong);
+}
+
+.view-toggle {
+  height: 32px;
+  padding: 0 13px;
+}
+
+/* ---------- simple view: one column, the server card under the maps ---------- */
+body.simple .layout {
+  display: flex;
+  flex-direction: column;
+}
+
+body.simple .col-side {
+  display: contents;
+}
+
+body.simple .strip {
+  order: -1;
+}
+
+/* It gives way before the cards next to it (the guide's list, the strip). */
+body.simple #view-maps .col-main {
+  flex: 1 20 auto;
+}
+
+body.simple .server-panel {
+  order: 1;
+  /* Its own height, but it scrolls rather than push Restart/Stop out of a small window; the
+     maps give way first (down to their minimum). */
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+body.simple .maps-card {
+  flex-shrink: 20;
+}
+
+body.simple .row-play {
+  opacity: 0.85;
+}
+
+.server-panel.compact {
+  gap: 12px;
+  padding: 14px 18px;
+}
+
+.cp-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 10px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.cp-head .status-dot {
+  align-self: center;
+}
+
+.cp-head strong {
+  flex: none;
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.cp-title {
+  flex: none;
+  max-width: 45%;
+  font-size: 14.5px;
+  font-weight: 700;
+  color: var(--text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cp-sub {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cp-head .status-time {
+  max-width: none;
+}
+
+/* Restart and Stop in the top line while it boots. */
+.cp-head-buttons {
+  flex: none;
+  margin-left: auto;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -4px 0;
+}
+
+.cp-head-buttons .status-time {
+  margin-left: 4px;
+}
+
+.cp-head .icon-btn {
+  align-self: center;
+  margin: -4px -6px -4px 0;
+}
+
+.compact .boot {
+  padding: 12px 14px;
+}
+
+/* ---------- right-click menu ---------- */
+.ctx-menu {
+  position: fixed;
+  z-index: 40;
+  min-width: 220px;
+  margin: 0;
+  padding: 5px;
+  list-style: none;
+  background: #30323c;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  animation: dd-in 0.1s ease-out;
+}
+
+.ctx-menu li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px 7px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ctx-menu li svg {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
+.ctx-menu li.prefab svg {
+  color: var(--warn);
+}
+
+.ctx-menu li.start svg {
+  color: var(--accent);
+}
+
+.ctx-menu li:hover:not(.disabled),
+.ctx-menu li.active {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.ctx-menu li.disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
+/* A menu's title line ("Teleport to G12"). */
+.ctx-menu li.menu-head {
+  padding-top: 5px;
+  padding-bottom: 5px;
+  font-size: 11.5px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.ctx-menu li.sep {
+  height: 1px;
+  margin: 4px 6px;
+  padding: 0;
+  background: var(--line-strong);
+  cursor: default;
+}
+
+/* ---------- server owner (setup) ---------- */
+.owner-field {
+  display: grid;
+  gap: 6px;
+  margin: -4px 0 0 28px;
+}
+
+.text-input {
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 1px solid var(--line-strong);
+  background: var(--inset);
+  color: var(--text-strong);
+  font: 12.5px var(--mono);
+  outline: none;
+  user-select: text;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.text-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.text-input.bad {
+  border-color: rgba(239, 106, 98, 0.6);
+}
+
+.owner-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.owner-hint.bad {
+  color: #ff948d;
+}
+
+.owner-hint b {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.owner-hint .link {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.owner-hint .link:hover {
+  text-decoration: underline;
+}
+
+/* The strip spans the window in the simple view: its button goes to the right. */
+body.simple .strip-text {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 14px;
+  align-items: center;
+}
+
+body.simple .strip-text > strong,
+body.simple .strip-text > span {
+  grid-column: 1;
+}
+
+body.simple .strip-actions {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  margin-top: 0;
+}
+
+body.simple .strip-row {
+  align-items: center;
+}
+
+/* ---------- setup: live options, links, the countdown ---------- */
+.setup-live-note {
+  margin: 0;
+  font-size: 12px;
+  color: #a9bbef;
+}
+
+a.ext-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a.ext-link:hover {
+  text-decoration: underline;
+}
+
+.setup-actions.centered {
+  justify-content: center;
+}
+
+.setup-actions.centered .spacer,
+.setup-actions.centered .btn-link {
+  display: none;
+}
+
+.btn.countdown {
+  position: relative;
+  overflow: hidden;
+  min-width: 200px;
+}
+
+.btn.countdown > span {
+  position: relative;
+  z-index: 1;
+}
+
+.countdown-bar {
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.24);
+  transform: scaleX(0);
+  transform-origin: left center;
+  pointer-events: none;
+}
+
+.btn.countdown.counting .countdown-bar {
+  animation: deplete 5s linear forwards;
+}
+
+@keyframes deplete {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+/* ---------- splitter between the maps and the console / server card ---------- */
+#view-maps .col-main {
+  gap: 0;
+}
+
+.splitter {
+  flex: none;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: row-resize;
+  outline: none;
+  touch-action: none;
+}
+
+.splitter i {
+  width: 44px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  transition: background 0.15s, width 0.15s;
+}
+
+.splitter:hover i,
+.splitter.dragging i,
+.splitter:focus-visible i {
+  width: 72px;
+  background: var(--accent);
+}
+
+body.resizing,
+body.resizing * {
+  cursor: row-resize !important;
+  user-select: none;
+}
+
+/* The simple view's server card: its part, then the server's output when made taller. */
+.cp-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cp-log {
+  display: none;
+  position: relative;
+  flex: 1 1 0;
+  /* Room for the command line: the lines above it come as the card grows. */
+  min-height: 46px;
+}
+
+.server-panel.compact.sized .cp-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cp-log .console-input {
+  flex: none;
+  margin-top: 0;
+}
+
+.cp-log .log {
+  flex: 1;
+  min-height: 0;
+}
+
+.cp-log > .max-btn {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  z-index: 1;
+  background: var(--console);
+}
+
+/* ---------- full screen consoles ---------- */
+/* Under the pages and windows (Settings, dialogs, toasts) that open over them. */
+body.has-max::before {
+  content: "";
+  position: fixed;
+  inset: 60px 0 0;
+  z-index: 7;
+  background: var(--bg);
+}
+
+.card.maximized {
+  position: fixed;
+  inset: 78px 22px 18px;
+  z-index: 8;
+  display: flex !important;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ---------- foldable map groups ---------- */
+button.map-group {
+  width: 100%;
+  border: 0;
+  background: none;
+  font-family: var(--font);
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.map-group:hover {
+  color: var(--muted);
+}
+
+button.map-group:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
+.group-chevron {
+  width: 13px;
+  height: 13px;
+  margin: 0 -2px 0 -3px;
+  transition: transform 0.15s;
+}
+
+.map-group.collapsed .group-chevron {
+  transform: rotate(-90deg);
+}
+
+/* ---------- the content uses the whole window, full screen too ---------- */
+.layout {
+  width: 100%;
+}
+
+.topbar,
+.footer {
+  padding-inline: 22px;
+}
+
+/* ---------- console: who wrote each line ---------- */
+.ln .src {
+  flex: none;
+  width: 10ch;
+  font-size: 10.5px;
+  line-height: 19px;
+  color: var(--src-color, var(--faint));
+  opacity: 0.85;
+}
+
+.ln.src-server {
+  --src-color: var(--src-server);
+}
+.ln.src-map {
+  --src-color: var(--src-map);
+}
+.ln.src-carbon {
+  --src-color: var(--src-carbon);
+}
+.ln.src-oxide {
+  --src-color: var(--src-oxide);
+}
+.ln.src-rustedit {
+  --src-color: var(--src-rustedit);
+}
+.ln.src-rcon {
+  --src-color: var(--src-rcon);
+}
+.ln.src-droplaunch {
+  --src-color: var(--src-droplaunch);
+}
+.ln.src-steamcmd {
+  --src-color: var(--src-steamcmd);
+}
+
+/* The text takes a hint of its source's colour; the server's own lines stay plain. */
+.ln:not(.src-server) .m {
+  color: color-mix(in srgb, var(--src-color) 38%, #c4c9d1);
+}
+
+.ln.src-server .src {
+  opacity: 0.6;
+}
+
+/* Warnings, errors and the console's own commands keep their meaning over the source colour. */
+.log .ln.warn .m {
+  color: var(--warn);
+}
+.log .ln.error .m {
+  color: var(--danger);
+}
+.log .ln.ok .m {
+  color: var(--ok);
+}
+.log .ln.cmd .m {
+  color: var(--text-strong);
+}
+.log .ln.reply .m {
+  color: color-mix(in srgb, var(--src-rcon) 30%, #d9dde4);
+}
+
+/* ---------- boot steps: a path from "Server started" to "Ready" ---------- */
+.boot-path {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 0;
+  margin: 12px 0 0;
+  padding: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.boot-path li {
+  --c: var(--src-server);
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+  color: var(--faint);
+}
+
+.boot-path li:last-child {
+  flex: 0 0 auto;
+}
+
+.boot-path li.src-map {
+  --c: var(--src-map);
+}
+.boot-path li.src-carbon {
+  --c: var(--src-carbon);
+}
+.boot-path li.src-oxide {
+  --c: var(--src-oxide);
+}
+.boot-path li.src-rcon {
+  --c: var(--src-rcon);
+}
+.boot-path li.src-ready {
+  --c: var(--ok);
+}
+
+.boot-path .dot {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1.5px solid var(--line-strong);
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.boot-path .dot svg {
+  width: 9px;
+  height: 9px;
+  stroke-width: 3.2;
+  color: var(--card);
+}
+
+.boot-path .link {
+  flex: 1 1 14px;
+  min-width: 14px;
+  position: relative;
+  height: 1.5px;
+  margin: 0 8px 0 4px;
+  background: var(--line-strong);
+  color: var(--line-strong);
+}
+
+/* The arrow head. */
+.boot-path .link::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-top: 1.5px solid currentColor;
+  border-right: 1.5px solid currentColor;
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.boot-path li.done {
+  color: color-mix(in srgb, var(--c) 45%, var(--text));
+}
+
+.boot-path li.done .dot {
+  background: var(--c);
+  border-color: var(--c);
+}
+
+.boot-path li.done .link {
+  background: color-mix(in srgb, var(--c) 55%, transparent);
+  color: color-mix(in srgb, var(--c) 70%, transparent);
+}
+
+.boot-path li.active {
+  color: var(--text-strong);
+}
+
+.boot-path li.active .dot {
+  border-color: var(--c);
+  background: color-mix(in srgb, var(--c) 22%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 16%, transparent);
+  animation: blink 1.1s ease-in-out infinite;
+}
+
+/* ---------- hints: something prefab test mode avoids ---------- */
+.hint {
+  display: grid;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(230, 180, 80, 0.3);
+  background: rgba(230, 180, 80, 0.08);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.hint-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.hint-icon {
+  flex: none;
+  color: var(--warn);
+  padding-top: 1px;
+}
+
+.hint-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.hint-body {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+}
+
+.hint-item {
+  display: grid;
+  gap: 2px;
+}
+
+.hint-item strong {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.hint-item > span {
+  color: var(--text);
+}
+
+.hint-time {
+  color: var(--warn);
+  font-weight: 600;
+}
+
+/* Their own row under the text, the full width of the note. */
+.hint-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hint-actions .btn,
+.cp-join .btn {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.hint-actions .btn span,
+.cp-join .btn span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hint-top > .icon-btn {
+  flex: none;
+  margin: -5px -6px 0 0;
+}
+
+/* A boot that hangs on a step prefab test mode skips: hard to miss. */
+.hint.stuck {
+  gap: 12px;
+  padding: 14px;
+  border-color: rgba(230, 180, 80, 0.7);
+  background: linear-gradient(rgba(230, 180, 80, 0.17), rgba(230, 180, 80, 0.1));
+  animation: stuck-in 0.35s ease-out, stuck-glow 1.6s ease-in-out 0.35s 4;
+}
+
+.hint.stuck .hint-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(230, 180, 80, 0.2);
+}
+
+.hint.stuck .hint-item strong {
+  font-size: 14px;
+  color: #ffe2a6;
+}
+
+.hint.stuck .hint-actions .btn-primary {
+  flex: 1 1 auto;
+}
+
+@keyframes stuck-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes stuck-glow {
+  50% {
+    box-shadow: 0 0 0 5px rgba(230, 180, 80, 0.22);
+  }
+}
+
+/* The button that fixes it keeps calling for attention. */
+.btn.attention {
+  animation: attention 1.6s ease-in-out infinite;
+}
+
+@keyframes attention {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(122, 149, 227, 0.55);
+  }
+  60% {
+    box-shadow: 0 0 0 7px rgba(122, 149, 227, 0);
+  }
+}
+
+.boot.stalled .bar-fill {
+  background: var(--warn);
+}
+
+.boot.stalled .boot-pct {
+  color: var(--warn);
+}
+
+.status-dot.warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 4px rgba(230, 180, 80, 0.22);
+  animation: blink 1.1s ease-in-out infinite;
+}
+
+.status-row:has(.status-dot.warn) strong,
+.cp-head:has(.status-dot.warn) > strong {
+  color: var(--warn);
+}
+
+.chip-stuck {
+  color: var(--warn);
+  background: rgba(230, 180, 80, 0.14);
+}
+
+.toast.warn {
+  border-color: rgba(230, 180, 80, 0.6);
+  background: #3d3729;
+}
+
+/* ---------- simple view's server card: Join on the left, F1 + Restart/Stop on the right ---------- */
+.cp-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+}
+
+.cp-join,
+.cp-buttons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cp-join .btn,
+.cp-buttons .btn {
+  flex: none;
+  padding: 0 14px;
+}
+
+.cp-control {
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
+  min-width: 0;
+}
+
+.cp-connect {
+  flex: 0 1 auto;
+  min-width: 0;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.cp-connect code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: text;
+}
+
+/* ---------- map list sections ---------- */
+.map-section + .map-section {
+  margin-top: 12px;
+}
+
+.map-list button.map-group {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 7px;
+  margin-bottom: 4px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--card) 92%, white);
+  box-shadow: 0 6px 10px -8px rgba(0, 0, 0, 0.45);
+  color: var(--muted);
+}
+
+.map-list button.map-group:hover {
+  color: var(--text);
+}
+
+.map-section.folded button.map-group {
+  margin-bottom: 0;
+  box-shadow: none;
+}
+
+.group-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  opacity: 0.85;
+}
+
+.group-maps .group-icon {
+  color: var(--accent);
+}
+
+.group-builtin .group-icon {
+  color: var(--ok);
+}
+
+.group-title {
+  color: var(--text);
+}
+
+.group-rule {
+  flex: 1;
+}
+
+.watching {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+}
+
+.watching i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  opacity: 0.7;
+  animation: blink 2.4s ease-in-out infinite;
+}
+
+/* ---------- a map in the active folder was just saved or added: its row says so ---------- */
+.map-row.fresh {
+  background: var(--accent-soft);
+  border-color: rgba(122, 149, 227, 0.55);
+  box-shadow: 0 0 0 3px rgba(122, 149, 227, 0.12);
+  animation: fresh-in 0.25s ease-out;
+}
+
+.chip-fresh {
+  color: #10142a;
+  background: var(--accent);
+}
+
+.row-fresh,
+.row-dismiss {
+  flex: none;
+}
+
+.row-fresh {
+  height: 28px;
+  padding: 0 12px;
+}
+
+@keyframes fresh-in {
+  from {
+    box-shadow: 0 0 0 8px rgba(122, 149, 227, 0.35);
+  }
+}
+
+/* ---------- the active maps folder (Folders card) ---------- */
+.folder-watch {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.folder-note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* ---------- server files page: the files card (it folds) and SteamCMD's output under it ---------- */
+
+#server-card {
+  flex: none;
+}
+
+/* Folded: its line (with the build), the buttons, and what a job is doing. */
+.fold-only {
+  display: none;
+}
+
+#server-card.folded .card-head .sub {
+  display: block;
+}
+
+#server-card.folded .fold-only {
+  display: inline;
+}
+
+#server-card.folded > .card-head {
+  margin-bottom: 14px;
+}
+
+/* ---------- side column width ---------- */
+.vsplitter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  outline: none;
+  touch-action: none;
+}
+
+.vsplitter i {
+  width: 4px;
+  height: 44px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  transition: background 0.15s, height 0.15s;
+}
+
+.vsplitter:hover i,
+.vsplitter.dragging i,
+.vsplitter:focus-visible i {
+  height: 72px;
+  background: var(--accent);
+}
+
+body.simple .vsplitter {
+  display: none;
+}
+
+body.resizing-x,
+body.resizing-x * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
+/* A small window with a tall card (boot steps + a hint): Restart and Stop stay in view. */
+.server-panel.compact .cp-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--card);
+}
+
+.server-panel.compact:not(.sized) .cp-actions {
+  bottom: -14px;
+  margin: -6px -18px -14px;
+  padding: 6px 18px 14px;
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+
+.server-panel::-webkit-scrollbar,
+#server-card::-webkit-scrollbar {
+  width: 10px;
+}
+
+.server-panel::-webkit-scrollbar-thumb,
+#server-card::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.server-panel::-webkit-scrollbar-track,
+#server-card::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------- first start: what DropLaunch does, then setup ---------- */
+.welcome {
+  width: min(600px, 100%);
+}
+
+/* One big button: what setting up gets you. */
+.welcome-card {
+  --tint: var(--accent);
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  padding: 22px 24px;
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    radial-gradient(120% 90% at 0% 0%, rgba(122, 149, 227, 0.22), transparent 60%),
+    linear-gradient(160deg, #2e3344, #252935);
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  transition: filter 0.2s, border-color 0.2s;
+}
+
+.welcome-card:hover,
+.welcome-card:focus-visible {
+  filter: brightness(1.08);
+  border-color: color-mix(in srgb, var(--tint) 45%, transparent);
+}
+
+.welcome-card:active {
+  filter: brightness(0.98);
+}
+
+/* A big faint icon behind it. */
+.welcome-art {
+  position: absolute;
+  right: 18%;
+  bottom: -70px;
+  z-index: -1;
+  width: 190px;
+  height: 190px;
+  color: var(--tint);
+  opacity: 0.06;
+  transform: rotate(-10deg);
+  pointer-events: none;
+  transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.3s;
+}
+
+.welcome-art svg {
+  width: 100%;
+  height: 100%;
+  stroke-width: 1.3;
+}
+
+.welcome-card:hover .welcome-art,
+.welcome-card:focus-visible .welcome-art {
+  opacity: 0.1;
+  transform: rotate(-6deg) translateY(-6px);
+}
+
+.welcome-icon {
+  align-self: start;
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--tint) 16%, transparent);
+  color: var(--tint);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tint) 22%, transparent);
+}
+
+.welcome-icon svg {
+  width: 21px;
+  height: 21px;
+}
+
+.welcome-content {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.welcome-content strong {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+.welcome-facts {
+  display: grid;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.welcome-facts > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.welcome-facts > span > svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--tint);
+}
+
+/* Not in a folder of its own (a drive's root, the Desktop…). */
+.welcome-facts > .warn {
+  align-items: flex-start;
+  color: var(--warn);
+}
+
+.welcome-facts > .warn > svg {
+  margin-top: 2px;
+  color: var(--warn);
+}
+
+/* The button-like pill: fills in when the card is hovered. */
+.welcome-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--tint) 45%, transparent);
+  color: var(--tint);
+  font-size: 13.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  transition: background 0.2s, color 0.2s, gap 0.2s;
+}
+
+.welcome-go svg {
+  width: 16px;
+  height: 16px;
+}
+
+.welcome-card:hover .welcome-go,
+.welcome-card:focus-visible .welcome-go {
+  background: var(--tint);
+  color: #15171c;
+  gap: 11px;
+}
+
+/* Narrow: the pill goes under the text. */
+@media (max-width: 520px) {
+  .welcome-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .welcome-go {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}
+
+/* ---------- a new DropLaunch is available (top bar) ---------- */
+.update-btn {
+  height: 32px;
+  padding: 0 12px;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #10142a;
+  font-weight: 650;
+}
+
+.update-btn:hover:not(:disabled) {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
+.update-btn:disabled {
+  opacity: 1;
+  cursor: progress;
+}
+
+@media (max-width: 600px) {
+  .update-btn span {
+    display: none;
+  }
+
+  .update-btn {
+    padding: 0 9px;
+  }
+}
+
+/* More options in a narrow window (sooner with Update DropLaunch): the name gives way (the logo
+   stays), then the tabs show only their icons (their words stay for screen readers). */
+@media (max-width: 1000px) {
+  body:not(.simple):has(#btn-update:not([hidden])) .brand-name {
+    display: none;
+  }
+}
+
+@media (max-width: 700px) {
+  body:not(.simple) .brand-name {
+    display: none;
+  }
+}
+
+@media (max-width: 800px) {
+  body:not(.simple):has(#btn-update:not([hidden])) .tabs button {
+    padding: 0 12px;
+  }
+
+  body:not(.simple):has(#btn-update:not([hidden])) .tabs button > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+/* ---------- Server files page: the Rust game, DropLaunch itself ---------- */
+.game-body {
+  display: grid;
+  gap: 10px;
+}
+
+.game-body .folder-note {
+  margin: -4px 0 0 28px;
+}
+
+#game-card .card-head > div {
+  flex: 1;
+  min-width: 0;
+}
+
+#game-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* When the top bar runs out of room: the status pills say only what they're about (the dot says
+   how it is), then More options becomes an icon. Update DropLaunch keeps its words. */
+@media (max-width: 1000px) {
+  .status-group .pill[data-short] span {
+    display: none;
+  }
+
+  .status-group .pill[data-short]::after {
+    content: attr(data-short);
+  }
+}
+
+@media (max-width: 1400px) {
+  body:has(#btn-update:not([hidden])) .status-group .pill[data-short] span {
+    display: none;
+  }
+
+  body:has(#btn-update:not([hidden])) .status-group .pill[data-short]::after {
+    content: attr(data-short);
+  }
+}
+
+@media (max-width: 1240px) {
+  body:has(#btn-update:not([hidden])) .view-toggle span {
+    display: none;
+  }
+
+  body:has(#btn-update:not([hidden])) .view-toggle {
+    padding: 0 9px;
+  }
+}
+
+/* ---------- a new DropLaunch is available ---------- */
+.app-update {
+  width: min(560px, 100%);
+}
+
+.app-update-notes {
+  max-height: 34vh;
+  overflow-y: auto;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--inset);
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-line;
+  color: var(--text);
+}
+
+.app-update-notes[hidden] {
+  display: none;
+}
+
+.app-update-note {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.app-update-note.error {
+  color: var(--danger);
+}
+
+.app-update-progress {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.app-update-progress[hidden] {
+  display: none;
+}
+
+#app-update-skip-row[hidden] {
+  display: none;
+}
+
+/* ---------- About: the version, and the libraries DropLaunch is made with ---------- */
+.tag-btn {
+  border: 0;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.tag-btn:hover {
+  filter: brightness(1.2);
+}
+
+.footer-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.footer-link:hover {
+  color: var(--text-strong);
+}
+
+.about {
+  width: min(640px, 100%);
+}
+
+.about-h {
+  margin: 14px 0 4px;
+  font-size: 13px;
+  color: var(--text-strong);
+}
+
+.about-text {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.about-search {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.about-list {
+  max-height: min(40vh, 380px);
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--inset);
+}
+
+.about-list .about-empty {
+  padding: 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.lic + .lic {
+  border-top: 1px solid var(--line);
+}
+
+.lic-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.lic-head:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.lic-head svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--faint);
+  transform: rotate(-90deg);
+  transition: transform 0.15s;
+}
+
+.lic.open .lic-head svg {
+  transform: none;
+}
+
+.lic-name {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.lic-version {
+  font: 11px var(--mono);
+  color: var(--faint);
+}
+
+.lic-license {
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.lic-body {
+  padding: 0 12px 10px 32px;
+}
+
+.lic-meta {
+  margin: 0 0 6px;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.lic-file {
+  margin: 8px 0 3px;
+  font: 600 11px var(--mono);
+  color: var(--faint);
+}
+
+.lic-text {
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  font: 11px/1.45 var(--mono);
+  color: var(--text);
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+/* A folder in the setup window: click to choose another one. */
+.reqs li,
+.reqs li > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.path-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 3px 0 1px;
+  padding: 2px 7px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.path-btn .path-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.path-btn svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  opacity: 0.7;
+}
+
+.path-btn:hover {
+  border-color: rgba(122, 149, 227, 0.6);
+  background: rgba(122, 149, 227, 0.2);
+}
+
+.path-btn:hover svg {
+  opacity: 1;
+}
+
+.path-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ---------- live graphs (graph.js): the server's performance ---------- */
+.graph {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.graph-plot {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.08));
+}
+
+.graph-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.graph-tip {
+  position: fixed;
+  z-index: 30;
+  top: 0;
+  left: 0;
+  display: grid;
+  gap: 2px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: rgba(20, 22, 28, 0.94);
+  color: var(--text-strong);
+  font-size: 11.5px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.graph-tip span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.graph-tip i,
+.graph-key i {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.graph-tip .graph-tip-time {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.graph-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.graph-key b {
+  color: var(--text-strong);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-extra {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- playtest page (playtest.js): /bug reports on a picture of the map ---------- */
+.pt-page {
+  position: fixed;
+  top: 60px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  animation: fade-in 0.15s ease-out;
+}
+
+.pt-top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.pt-heading {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+
+.pt-heading h2 {
+  margin: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+  color: var(--text-strong);
+}
+
+.pt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pt-chip {
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 12px;
+}
+
+.pt-chip.is-live {
+  color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.pt-toggle {
+  flex: none;
+  align-items: center;
+  font-size: 12.5px;
+}
+
+.pt-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(330px, 1fr);
+  gap: 16px;
+  padding: 16px 22px 18px;
+}
+
+.pt-map-card,
+.pt-list-card {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+
+.pt-map-wrap {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+}
+
+.pt-map {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #0e2a33;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+
+.pt-map:active {
+  cursor: grabbing;
+}
+
+.pt-map canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.pt-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.pt-layer > * {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: auto;
+}
+
+/* A report: a numbered pin with its tip on the spot. */
+.pt-pin {
+  width: 28px;
+  height: 34px;
+  margin: -31px 0 0 -14px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.5));
+}
+
+.pt-pin::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  border: 2px solid #fff;
+  background: var(--danger);
+}
+
+.pt-pin span {
+  position: absolute;
+  left: 0;
+  top: 2px;
+  width: 26px;
+  line-height: 24px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 750;
+  color: #fff;
+}
+
+.pt-pin.fixed::before {
+  background: var(--ok);
+}
+
+.pt-pin.sel {
+  z-index: 2;
+}
+
+.pt-pin.sel::before {
+  box-shadow: 0 0 0 4px rgba(122, 149, 227, 0.75);
+}
+
+.pt-pin:hover::before {
+  filter: brightness(1.15);
+}
+
+/* A tester right now: glides to the next position (2 s apart). */
+.pt-player {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: -7px 0 0 -7px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #fff;
+  cursor: pointer;
+  transition: transform 1.9s linear;
+}
+
+.pt-moving .pt-player {
+  transition: none;
+}
+
+.pt-player i {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(122, 149, 227, 0.3);
+}
+
+.pt-player.sleeping i {
+  background: var(--faint);
+  box-shadow: none;
+}
+
+.pt-player-name {
+  font-size: 11.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  text-shadow: 0 1px 3px #000, 0 0 2px #000;
+}
+
+.pt-map-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--text);
+  pointer-events: none;
+}
+
+.pt-zoom {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.pt-zoom .icon-btn {
+  background: rgba(20, 22, 28, 0.78);
+  border-color: var(--line-strong);
+  color: var(--text-strong);
+}
+
+.pt-legend {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pt-legend .check {
+  align-items: center;
+  font-size: 12px;
+}
+
+.pt-key::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: 0;
+}
+
+.pt-key.open::before {
+  background: var(--danger);
+}
+
+.pt-key.fixed::before {
+  background: var(--ok);
+}
+
+.pt-key.tester::before {
+  background: var(--accent);
+}
+
+.pt-list-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 12px;
+}
+
+.pt-list-title h3 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-strong);
+}
+
+.pt-list-title .sub {
+  margin: 2px 0 0;
+}
+
+.seg button b {
+  font-weight: 650;
+  color: var(--muted);
+}
+
+.pt-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--inset);
+  font-size: 12.5px;
+}
+
+.pt-status.ok {
+  border-color: rgba(76, 195, 138, 0.3);
+  background: var(--ok-soft);
+}
+
+.pt-status.warn {
+  border-color: rgba(230, 180, 80, 0.35);
+  background: rgba(230, 180, 80, 0.08);
+}
+
+.pt-status-text {
+  flex: 1 1 200px;
+}
+
+.status-dot.off {
+  background: var(--faint);
+}
+
+.pt-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.pt-bug {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  padding: 10px 10px 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--inset);
+  cursor: pointer;
+}
+
+.pt-bug:hover {
+  border-color: var(--line-strong);
+}
+
+.pt-bug.sel {
+  border-color: rgba(122, 149, 227, 0.6);
+  background: rgba(122, 149, 227, 0.07);
+}
+
+.pt-num {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11.5px;
+  font-weight: 750;
+}
+
+.pt-bug.fixed .pt-num {
+  background: var(--ok);
+}
+
+.pt-bug-text {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.pt-bug-text strong {
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.pt-bug.fixed strong {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.pt-meta {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.pt-acts {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.pt-delete {
+  opacity: 0.55;
+}
+
+.pt-bug:hover .pt-delete {
+  opacity: 1;
+}
+
+.pt-delete:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.pt-none {
+  padding: 18px 12px;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.pt-howto {
+  flex: none;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed var(--line-strong);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.pt-howto code {
+  color: var(--accent);
+  font: 600 12px var(--mono);
+}
+
+/* The server card's way in: open reports, and a dot while testers can send them. */
+
+
+
+@media (max-width: 1000px) {
+  .pt-top {
+    padding: 10px 16px;
+  }
+
+  .pt-body {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.8fr);
+    gap: 12px;
+    padding: 12px 16px 14px;
+  }
+}
+
+/* Narrow windows: the map on top (square), the list under it; the page scrolls. */
+@media (max-width: 720px) {
+  .pt-top {
+    flex-wrap: wrap;
+  }
+
+  .pt-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    overflow-y: auto;
+  }
+
+  .pt-map-wrap {
+    flex: none;
+    height: min(calc(100vw - 60px), 62vh);
+  }
+
+  .pt-list {
+    overflow: visible;
+  }
+}
+
+/* A narrow list: the buttons go under the text. */
+.pt-list-card {
+  container-type: inline-size;
+}
+
+@container (max-width: 400px) {
+  .pt-bug .pt-acts {
+    grid-column: 2 / -1;
+  }
+
+  .pt-bug {
+    grid-template-columns: 26px minmax(0, 1fr);
+  }
+}
+
+/* ---------- map pictures: icons in the map list, and the map viewer (mapviewer.js) ---------- */
+.map-thumb {
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  background: #0e2a33;
+  cursor: zoom-in;
+}
+
+.map-thumb img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.map-thumb:hover {
+  border-color: rgba(122, 149, 227, 0.7);
+  box-shadow: 0 0 0 2px rgba(122, 149, 227, 0.25);
+}
+
+.map-thumb:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mv {
+  width: min(980px, 100%);
+  height: min(900px, calc(100vh - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.mv-head {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.mv-head .check {
+  align-items: center;
+  font-size: 12.5px;
+}
+
+.mv-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.mv-heading h2 {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+  color: var(--text-strong);
+}
+
+.mv-heading .sub {
+  margin: 2px 0 0;
+}
+
+.mv-map {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+}
+
+.mv-foot {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---------- server owner: Detect my Steam IDs, accounts as cards with their Steam picture ---------- */
+.owner-row {
+  display: flex;
+  gap: 8px;
+}
+
+.owner-row .text-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.owner-row .btn {
+  flex: none;
+  height: 34px;
+}
+
+.owner-accounts {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px;
+}
+
+.account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 7px 10px 7px 7px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: var(--inset);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.account:hover {
+  border-color: rgba(122, 149, 227, 0.5);
+}
+
+.account.picked {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.account-pic {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-strong);
+  font-weight: 750;
+}
+
+.account-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+}
+
+.account-text b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.account-text code {
+  padding: 0;
+  background: none;
+  font: 11px var(--mono);
+  color: var(--muted);
+}
+
+.account-badge {
+  flex: none;
+  /* Next to the name, above the Steam ID. */
+  align-self: flex-start;
+  margin-top: 1px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--ok-soft);
+  color: var(--ok);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+
+.account-check {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  visibility: hidden;
+}
+
+.account-check svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 3;
+}
+
+.account.picked .account-check {
+  visibility: visible;
+}
+
+/* ---------- Mods card: bug reports and Carbon's profiler ---------- */
+.mods-toggles {
+  display: grid;
+  gap: 8px;
+  margin: -4px 0 14px;
+}
+
+.mods-toggles .check {
+  font-size: 12.5px;
+}
+
+/* ---------- cards that fold (Server files page, side column) ---------- */
+.fold-btn svg {
+  transition: transform 0.15s;
+}
+
+.card.folded .fold-btn svg {
+  transform: rotate(-90deg);
+}
+
+.card.folded > :not(.card-head):not(.fold-keep) {
+  display: none;
+}
+
+.card.folded > .card-head {
+  margin-bottom: 0;
+}
+
+.card.folded .card-head .sub {
+  display: none;
+}
+
+/* Folded, a card's head keeps only its title and the chevron. */
+.card.folded > .card-head > .icon-btn:not(.fold-btn) {
+  display: none;
+}
+
+/* ---------- Carbon's profiler (server panel) ---------- */
+.profiler-box {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--inset);
+}
+
+.profiler-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  font-size: 12.5px;
+}
+
+.profiler-head strong {
+  color: var(--text-strong);
+  white-space: nowrap;
+}
+
+/* What it's doing, on its own line under the title. */
+.profiler-head span:not(.status-dot) {
+  flex-basis: 100%;
+  padding-left: 17px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.profiler-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.profiler-fold {
+  margin: -4px -6px -4px auto;
+}
+
+.profiler-fold svg {
+  transition: transform 0.2s;
+}
+
+.profiler-box.folded .profiler-fold svg {
+  transform: rotate(-90deg);
+}
+
+.profiler-box.folded .profiler-head span:not(.status-dot) {
+  display: none;
+}
+
+.card.foldable > .card-head {
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.card.foldable > .card-head > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Server files: the main column keeps room for its buttons on one line (Verify files and the
+   update / Fix setup button); a side column dragged wider on the Maps page gives way here. */
+#view-files.layout {
+  grid-template-columns: minmax(0, 1fr) var(--side-gap) max(280px, min(var(--side-w, var(--side-default)), 50%, calc(100% - 740px - var(--side-gap))));
+}
+
+/* ---------- the guide: tips as you go, the Getting started checklist ---------- */
+/* A tip: next to what it's about, with a ring around that. */
+.guide-tip {
+  position: fixed;
+  z-index: 13;
+  width: min(320px, calc(100vw - 24px));
+  padding: 12px 14px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(122, 149, 227, 0.55);
+  background: #2f3443;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.45;
+  animation: guide-in 0.18s ease-out;
+}
+
+.guide-tip-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.guide-tip-head svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+}
+
+.guide-tip-head strong {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.guide-tip p {
+  margin: 0 0 10px;
+}
+
+.guide-tip-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.guide-tip .guide-off {
+  height: 28px;
+  font-size: 12px;
+}
+
+.guide-arrow {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: inherit;
+  border: inherit;
+  transform: rotate(45deg);
+}
+
+.guide-tip[data-side="below"] .guide-arrow {
+  top: -7px;
+  left: calc(var(--arrow) - 6px);
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.guide-tip[data-side="above"] .guide-arrow {
+  bottom: -7px;
+  left: calc(var(--arrow) - 6px);
+  border-left: 0;
+  border-top: 0;
+}
+
+.guide-tip[data-side="right"] .guide-arrow {
+  left: -7px;
+  top: calc(var(--arrow) - 6px);
+  border-top: 0;
+  border-right: 0;
+}
+
+.guide-tip[data-side="left"] .guide-arrow {
+  right: -7px;
+  top: calc(var(--arrow) - 6px);
+  border-bottom: 0;
+  border-left: 0;
+}
+
+.guide-tip[data-side="inside"] .guide-arrow {
+  display: none;
+}
+
+.guide-ring {
+  position: fixed;
+  z-index: 12;
+  pointer-events: none;
+  border-radius: 12px;
+  box-shadow: 0 0 0 2px var(--accent), 0 0 0 6px rgba(122, 149, 227, 0.22);
+  animation: guide-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes guide-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes guide-pulse {
+  50% {
+    box-shadow: 0 0 0 2px var(--accent), 0 0 0 10px rgba(122, 149, 227, 0.08);
+  }
+}
+
+/* The checklist: on top of the side column (the Maps page), the top of the window in the simple view. */
+.guide-card {
+  flex: none;
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px 12px 16px;
+}
+
+body.simple .guide-card {
+  order: -2;
+}
+
+.guide-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.guide-icon {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.guide-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.guide-head h2 {
+  margin: 0;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.guide-count {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.guide-bar {
+  flex: 0 1 120px;
+  min-width: 40px;
+  display: flex;
+  gap: 3px;
+}
+
+.guide-bar i {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  transition: background 0.3s;
+}
+
+.guide-bar i.done {
+  background: var(--ok);
+}
+
+.guide-fold svg {
+  transition: transform 0.15s;
+}
+
+.guide-fold[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.guide-next {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-left: 36px;
+}
+
+.guide-next-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.guide-next-text b {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.guide-next .btn,
+.guide-step .btn {
+  flex: none;
+}
+
+.guide-steps {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.guide-step {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 10px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border-radius: 9px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.guide-step:not(.done):not(.current) {
+  cursor: pointer;
+}
+
+.guide-step:not(.done):not(.current):hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.guide-step.current {
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.guide-step.current .guide-step-title {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.guide-step.done .guide-step-title {
+  color: var(--muted);
+}
+
+/* Show me sits in the middle of the step, beside its title and text. */
+.guide-step.current > .btn {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  align-self: center;
+}
+
+.guide-step-text {
+  grid-column: 2;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.guide-mark {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+}
+
+.guide-step.current .guide-mark {
+  border-color: var(--accent);
+}
+
+.guide-step.done .guide-mark {
+  border-color: var(--ok);
+  background: var(--ok);
+  color: #11131a;
+}
+
+.guide-mark svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 3.2;
+}
+
+.guide-step.just-done .guide-mark {
+  animation: guide-tick 0.6s ease-out;
+}
+
+@keyframes guide-tick {
+  40% {
+    transform: scale(1.35);
+  }
+}
+
+.guide-foot {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.guide-foot .btn-link {
+  height: 24px;
+  font-size: 12px;
+}
+
+/* The welcome screen's "Show me around". */
+.welcome-guide {
+  justify-content: center;
+  margin: 16px auto 0;
+  max-width: 560px;
+}
+
+.welcome-guide em {
+  font-style: normal;
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guide-tip,
+  .guide-ring,
+  .guide-step.just-done .guide-mark {
+    animation: none;
+  }
+}
+
+/* The setup window: groups of options. */
+.opt-sep {
+  margin: 2px 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+/* ---------- Rent a server (a tab in Settings): hosting companies, BisectHosting first ---------- */
+.rent-body {
+  display: grid;
+  gap: 14px;
+  container-type: inline-size;
+}
+
+/* BisectHosting: wide, in its colour, with a light running around the edge. */
+@property --rent-spin {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.rent-featured {
+  --brand: #2fc8f5;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+  padding: 20px 24px 18px;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background:
+    radial-gradient(70% 130% at 0% 0%, color-mix(in srgb, var(--brand) 20%, transparent), transparent 62%) padding-box,
+    radial-gradient(50% 120% at 100% 100%, color-mix(in srgb, var(--brand) 9%, transparent), transparent 70%) padding-box,
+    linear-gradient(160deg, #262b38, #1d2029) padding-box,
+    conic-gradient(
+        from var(--rent-spin),
+        color-mix(in srgb, var(--brand) 75%, transparent),
+        rgba(255, 255, 255, 0.06) 22%,
+        rgba(255, 255, 255, 0.06) 50%,
+        color-mix(in srgb, var(--brand) 45%, transparent) 72%,
+        color-mix(in srgb, var(--brand) 75%, transparent)
+      )
+      border-box;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.2);
+  animation: rent-spin 7s linear infinite;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+@keyframes rent-spin {
+  to {
+    --rent-spin: 360deg;
+  }
+}
+
+.rent-featured:hover,
+.rent-featured:focus-visible {
+  transform: translateY(-2px);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.4), 0 0 36px color-mix(in srgb, var(--brand) 22%, transparent);
+}
+
+.rent-featured-main {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rent-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px 0 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--brand) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 32%, transparent);
+  color: var(--brand);
+  font-size: 10.5px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.rent-badge svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+}
+
+.rent-featured img {
+  display: block;
+  height: 66px;
+  max-width: 100%;
+  object-fit: contain;
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.rent-featured:hover img {
+  transform: scale(1.03);
+}
+
+.rent-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 42px;
+  padding: 0 20px;
+  border-radius: 999px;
+  background: var(--brand);
+  color: #08202a;
+  font-size: 14px;
+  font-weight: 750;
+  white-space: nowrap;
+  box-shadow: 0 8px 26px color-mix(in srgb, var(--brand) 35%, transparent);
+  transition: gap 0.2s, filter 0.2s;
+}
+
+.rent-cta svg {
+  width: 17px;
+  height: 17px;
+}
+
+.rent-featured:hover .rent-cta,
+.rent-featured:focus-visible .rent-cta {
+  gap: 12px;
+  filter: brightness(1.08);
+}
+
+/* The others: logo plates, four in a row (the last row centred). */
+.rent-grid {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+}
+
+.rent-card {
+  --brand: var(--accent);
+  position: relative;
+  flex: 0 0 calc((100% - 36px) / 4);
+  display: grid;
+  grid-template-rows: 64px auto;
+  justify-items: center;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 16px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01)), #1d1f27;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
+  outline: none;
+  overflow: hidden;
+  isolation: isolate;
+  transition: transform 0.18s, border-color 0.18s, box-shadow 0.18s, color 0.18s;
+}
+
+/* The host's colour comes up from the top on hover. */
+.rent-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: radial-gradient(85% 75% at 50% 0%, color-mix(in srgb, var(--brand) 24%, transparent), transparent 72%);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.rent-card::after {
+  content: "";
+  position: absolute;
+  inset: 0 18% auto;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: var(--brand);
+  opacity: 0;
+  transform: scaleX(0.4);
+  transition: opacity 0.2s, transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.rent-card:hover,
+.rent-card:focus-visible {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--brand) 50%, transparent);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35), 0 0 0 1px color-mix(in srgb, var(--brand) 22%, transparent);
+  color: var(--text);
+}
+
+.rent-card:hover::before,
+.rent-card:focus-visible::before {
+  opacity: 1;
+}
+
+.rent-card:hover::after,
+.rent-card:focus-visible::after {
+  opacity: 1;
+  transform: scaleX(1);
+}
+
+.rent-card:active,
+.rent-featured:active {
+  transform: translateY(0);
+}
+
+.rent-logo {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 64px;
+}
+
+.rent-logo img {
+  height: var(--h, 32px);
+  max-width: 88%;
+  object-fit: contain;
+  transition: transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.rent-card:hover .rent-logo img {
+  transform: scale(1.05);
+}
+
+.rent-logo img.invert {
+  filter: invert(1) brightness(1.15);
+}
+
+.rent-domain {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.rent-domain span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rent-domain svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  opacity: 0.6;
+  transition: transform 0.2s, opacity 0.2s, color 0.2s;
+}
+
+.rent-card:hover .rent-domain,
+.rent-featured:hover .rent-domain {
+  color: var(--text);
+}
+
+.rent-card:hover .rent-domain svg,
+.rent-featured:hover .rent-domain svg {
+  opacity: 1;
+  color: var(--brand);
+  transform: translate(2px, -2px);
+}
+
+.rent-foot {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.rent-foot svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+}
+
+/* As many in a row as the tab has room for: all seven when it's wide, then four, three, two. */
+@container (min-width: 1100px) {
+  .rent-card {
+    flex-basis: calc((100% - 72px) / 7);
+    grid-template-rows: 76px auto;
+  }
+
+  .rent-logo {
+    height: 76px;
+  }
+
+  .rent-logo img {
+    height: calc(var(--h, 32px) * 1.15);
+  }
+
+  .rent-featured {
+    padding: 24px 32px 22px;
+  }
+
+  .rent-featured img {
+    height: 80px;
+  }
+}
+
+@container (max-width: 640px) {
+  .rent-card {
+    flex-basis: calc((100% - 24px) / 3);
+  }
+}
+
+@container (max-width: 440px) {
+  .rent-featured {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rent-cta {
+    justify-self: start;
+  }
+
+  .rent-card {
+    flex-basis: calc((100% - 12px) / 2);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rent-featured {
+    animation: none;
+  }
+}
+
+/* ---------- Settings (the gear in the top bar): a page over the whole window ---------- */
+.settings-toggle {
+  width: 34px;
+  height: 32px;
+  padding: 0;
+  justify-content: center;
+}
+
+/* It slides down from the top, over everything (the windows it opens go on top of it). */
+.settings-page {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--bg);
+  transform: translateY(-100%);
+  transition: transform 0.32s cubic-bezier(0.3, 0.7, 0.15, 1);
+}
+
+.settings-page.open {
+  transform: none;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.settings-head {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 22px;
+  background: var(--bg-deep);
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-icon {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: linear-gradient(150deg, rgba(122, 149, 227, 0.3), rgba(122, 149, 227, 0.1));
+  color: #c3d0f7;
+  box-shadow: inset 0 0 0 1px rgba(122, 149, 227, 0.35);
+}
+
+.settings-icon svg {
+  width: 19px;
+  height: 19px;
+  animation: settings-turn 0.6s cubic-bezier(0.3, 0.7, 0.15, 1);
+}
+
+@keyframes settings-turn {
+  from {
+    transform: rotate(-90deg);
+  }
+}
+
+.settings-head h2 {
+  margin: 0;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+/* Simple view: the top bar says just how the server is (SteamCMD shows with more options). */
+body.simple #pill-steamcmd {
+  display: none;
+}
+
+body.simple #pill-steamcmd + .pill::before {
+  display: none;
+}
+
+/* Maps: the count and folder next to the title. */
+.maps-title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.maps-title h2 {
+  flex: none;
+}
+
+.maps-title .sub {
+  min-width: 0;
+  margin: 0;
+}
+
+/* Back (top left, Esc too): how every page over the window is left, like the bug reports page. */
+.back-btn {
+  flex: none;
+}
+
+.about > .back-btn {
+  justify-self: start;
+  margin-bottom: 4px;
+}
+
+.settings-frame {
+  display: grid;
+  grid-template-columns: 228px minmax(0, 1fr);
+  min-height: 0;
+}
+
+/* The tabs: a colour each, the one shown lit in it. */
+.settings-page [data-tone="violet"] {
+  --tone: #a58cf2;
+}
+
+.settings-page [data-tone="green"] {
+  --tone: var(--ok);
+}
+
+.settings-page [data-tone="orange"] {
+  --tone: #f0905c;
+}
+
+.settings-page [data-tone="yellow"] {
+  --tone: var(--warn);
+}
+
+.settings-page [data-tone="cyan"] {
+  --tone: #2fc8f5;
+}
+
+.settings-page [data-tone="blue"] {
+  --tone: var(--accent);
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 18px 12px;
+  border-right: 1px solid var(--line);
+  background: var(--bg-deep);
+  overflow-y: auto;
+}
+
+.settings-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 42px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 550;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+.settings-tab:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-strong);
+}
+
+.settings-tab:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--tone) 60%, transparent);
+}
+
+.settings-tab[aria-selected="true"] {
+  background: color-mix(in srgb, var(--tone) 12%, transparent);
+  color: var(--text-strong);
+}
+
+.settings-tab[aria-selected="true"]::before {
+  content: "";
+  position: absolute;
+  left: -12px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--tone);
+  box-shadow: 0 0 12px var(--tone);
+}
+
+/* Rent a server and About: a group of their own at the bottom. */
+.settings-tab.apart {
+  margin-top: auto;
+}
+
+.settings-tab.apart::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: -10px;
+  border-top: 1px solid var(--line);
+}
+
+.settings-tab-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--tone) 14%, transparent);
+  color: var(--tone);
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.settings-tab[aria-selected="true"] .settings-tab-icon {
+  background: color-mix(in srgb, var(--tone) 24%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 40%, transparent);
+}
+
+.settings-tab-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What the tab shows: it scrolls. */
+.settings-content {
+  position: relative;
+  min-width: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.settings-content::-webkit-scrollbar {
+  width: 10px;
+}
+
+.settings-content::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+/* In the middle of the space next to the tabs; settings read best in a column this wide. */
+.settings-pane {
+  position: relative;
+  display: grid;
+  gap: 14px;
+  width: 100%;
+  max-width: 940px;
+  margin-inline: auto;
+  padding: 30px 40px 44px;
+  isolation: isolate;
+}
+
+/* Rent a server: the hosts spread out over a wide window. */
+.settings-pane.pane-rent {
+  max-width: 1720px;
+}
+
+/* The tab's colour, softly, behind its title (reaching past the column's left edge, so the
+   centred column shows no edge). */
+.settings-pane::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -240px;
+  right: 0;
+  height: 280px;
+  z-index: -1;
+  background: radial-gradient(520px 270px at 360px 0, color-mix(in srgb, var(--tone) 13%, transparent), transparent 70%);
+  pointer-events: none;
+}
+
+.settings-pane.enter {
+  animation: settings-pane-in 0.24s ease-out;
+}
+
+@keyframes settings-pane-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.set-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+
+.set-hero-icon {
+  flex: none;
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border-radius: 15px;
+  background: linear-gradient(150deg, color-mix(in srgb, var(--tone) 34%, transparent), color-mix(in srgb, var(--tone) 10%, transparent));
+  color: var(--tone);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 40%, transparent), 0 10px 30px color-mix(in srgb, var(--tone) 20%, transparent);
+}
+
+.set-hero-icon svg {
+  width: 25px;
+  height: 25px;
+}
+
+.set-hero h3 {
+  margin: 2px 0 0;
+  font-size: 23px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--text-strong);
+}
+
+.set-hero p {
+  margin: 6px 0 0;
+  max-width: 620px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.set-group {
+  margin: 10px 2px -4px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* A card of settings: a row each. */
+.set-card {
+  display: grid;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 60%), var(--card);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  overflow: hidden;
+}
+
+.set-row {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-height: 64px;
+  padding: 14px 18px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.set-row + .set-row,
+.set-card > * + .set-row {
+  border-top: 1px solid var(--line);
+}
+
+label.set-row:hover,
+.set-action:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.set-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.set-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.set-note {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.set-note.path-note {
+  font: 12px var(--mono);
+  color: #b4c5f5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A row that does something: a button the width of the card. */
+.set-action {
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  outline: none;
+}
+
+.set-action:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--tone) 60%, transparent);
+}
+
+.set-go {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--muted);
+  transition: background 0.15s, color 0.15s, transform 0.2s;
+}
+
+.set-go svg {
+  width: 16px;
+  height: 16px;
+}
+
+.set-action:hover .set-go {
+  background: color-mix(in srgb, var(--tone) 18%, transparent);
+  color: var(--tone);
+  transform: translateX(2px);
+}
+
+/* On or off. */
+.switch {
+  position: relative;
+  flex: none;
+  width: 42px;
+  height: 24px;
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.switch-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  pointer-events: none;
+  transition: background 0.2s, box-shadow 0.2s;
+}
+
+.switch-track::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #c9ced6;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  transition: transform 0.22s cubic-bezier(0.3, 0.7, 0.15, 1.2), background 0.2s;
+}
+
+.switch input:checked + .switch-track {
+  background: var(--tone);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--tone) 35%, transparent);
+}
+
+.switch input:checked + .switch-track::after {
+  transform: translateX(18px);
+  background: #fff;
+}
+
+.switch input:focus-visible + .switch-track {
+  outline: 2px solid color-mix(in srgb, var(--tone) 70%, white);
+  outline-offset: 2px;
+}
+
+/* Language: a tile each. */
+.lang-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.lang-tile {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 66px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 13px;
+  background: var(--card);
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+
+.lang-tile:hover {
+  border-color: color-mix(in srgb, var(--tone) 45%, transparent);
+  transform: translateY(-1px);
+}
+
+.lang-tile:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--tone) 60%, transparent);
+}
+
+.lang-tile.on {
+  border-color: color-mix(in srgb, var(--tone) 65%, transparent);
+  background: linear-gradient(150deg, color-mix(in srgb, var(--tone) 16%, transparent), transparent 70%), var(--card);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 14%, transparent);
+  cursor: default;
+  transform: none;
+}
+
+.lang-code {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  font: 700 13px var(--mono);
+  letter-spacing: 0.04em;
+  color: var(--text-strong);
+}
+
+.lang-tile.on .lang-code {
+  background: color-mix(in srgb, var(--tone) 26%, transparent);
+  color: #fff;
+}
+
+.lang-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.lang-name {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lang-source {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.lang-in-use {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tone) 20%, transparent);
+  color: var(--tone);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.lang-in-use svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 3;
+}
+
+/* Dropping a language file: said in a drop zone of its own. */
+.set-drop {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 0;
+  padding: 13px 16px;
+  border: 1px dashed color-mix(in srgb, var(--tone) 38%, transparent);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--tone) 5%, transparent);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.set-drop svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  color: var(--tone);
+}
+
+/* The guide: Getting started, step by step. */
+.set-progress {
+  cursor: default;
+  min-height: 54px;
+}
+
+.set-progress .set-title {
+  flex: 1;
+}
+
+.set-bar {
+  display: flex;
+  gap: 4px;
+}
+
+.set-bar i {
+  width: 26px;
+  height: 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.set-bar i.done {
+  background: var(--tone);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--tone) 45%, transparent);
+}
+
+.set-count {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.set-steps {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 2px 18px 16px;
+  list-style: none;
+}
+
+.set-steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13.5px;
+  color: var(--text-strong);
+}
+
+.set-steps li.done {
+  color: var(--muted);
+}
+
+.set-step-mark {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+}
+
+.set-steps li.done .set-step-mark {
+  border-color: transparent;
+  background: var(--ok);
+  color: #0d2219;
+}
+
+.set-step-mark svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 3.2;
+}
+
+/* About: DropLaunch itself. */
+.set-brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: radial-gradient(70% 140% at 0% 0%, rgba(239, 106, 98, 0.12), transparent 65%), var(--card);
+}
+
+.set-brand-logo {
+  width: 54px;
+  height: 54px;
+  filter: drop-shadow(0 6px 16px rgba(239, 106, 98, 0.3));
+}
+
+.set-brand-name {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+/* The version tag stays here when the top bar hides its own. */
+.settings-page .set-brand-name .tag {
+  display: inline-block;
+}
+
+.set-brand-version {
+  display: block;
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* A smaller window: the tabs as icons. */
+@media (max-width: 760px) {
+  .settings-frame {
+    grid-template-columns: 66px minmax(0, 1fr);
+  }
+
+  .settings-nav {
+    padding: 14px 10px;
+  }
+
+  .settings-tab {
+    justify-content: center;
+    padding: 6px;
+  }
+
+  .settings-tab-label {
+    display: none;
+  }
+
+  .settings-tab[aria-selected="true"]::before {
+    left: -10px;
+  }
+
+  .settings-pane {
+    padding: 22px 20px 32px;
+  }
+}
+
+/* Windows' animations off: the page still slides in (asked for, and it's one short move), just
+   quicker; nothing else moves. */
+@media (prefers-reduced-motion: reduce) {
+  .settings-page {
+    transition-duration: 0.18s;
+  }
+
+  .settings-icon svg,
+  .settings-pane.enter,
+  .switch-track::after {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* ---------- Kits (the server card): a drawer on the right, the editor when it widens ---------- */
+.kits-card {
+  --tone: #7ad3a8;
+  flex: none;
+}
+
+body.simple .kits-card {
+  display: none;
+}
+
+.kits-head {
+  gap: 10px;
+}
+
+.kits-head h2 {
+  margin: 0;
+}
+
+.kits-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: linear-gradient(150deg, color-mix(in srgb, var(--tone) 32%, transparent), color-mix(in srgb, var(--tone) 10%, transparent));
+  color: var(--tone);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 38%, transparent);
+}
+
+.kits-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Back only full screen (where it leaves the editor, then full screen); expand only in the column. */
+.kits-card:not(.maximized) .back-btn,
+.kits-card.maximized .max-btn {
+  display: none;
+}
+
+.kits-main {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 0;
+}
+
+.kits-card.maximized .kits-main {
+  flex: 1;
+  display: block;
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+/* In the column: a kit and Give to everyone. */
+.kits-compact {
+  display: grid;
+  gap: 8px;
+}
+
+/* A narrow column: Give to goes under the kit instead of over it. */
+.kits-compact-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.kits-compact-row .dd {
+  flex: 1 1 150px;
+  min-width: 0;
+}
+
+.kits-compact-row .dd-value {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kits-compact-row .dd-btn {
+  width: 100%;
+}
+
+.kits-compact-row .btn {
+  flex: none;
+}
+
+.kits-compact .btn-ghost {
+  justify-self: start;
+}
+
+/* Full screen: the kits, the chosen one, who gets it (side by side when there's room). */
+.kits-full {
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr) minmax(280px, 340px);
+  gap: 20px;
+}
+
+.kits-col {
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding-right: 4px;
+}
+
+.kits-full .kit-detail .kit-slots {
+  grid-template-columns: repeat(var(--cols), minmax(0, 92px));
+  gap: 7px;
+}
+
+.kits-full .kit-detail .kit-amount {
+  font-size: 12px;
+}
+
+.kits-empty {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 60px 20px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.kits-empty svg {
+  width: 40px;
+  height: 40px;
+  color: var(--tone);
+}
+
+.kits-empty p {
+  margin: 0;
+  max-width: 360px;
+}
+
+@media (max-width: 1180px) {
+  .kits-full {
+    grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    overflow-y: auto;
+    height: 100%;
+    align-content: start;
+  }
+
+  /* Each as tall as it needs (the page scrolls), not squeezed into the window. */
+  .kits-col {
+    overflow: visible;
+    min-height: auto;
+  }
+
+  .kits-full .kits-list {
+    grid-row: 1 / span 2;
+  }
+
+  .kits-full .kits-who {
+    grid-column: 2;
+  }
+}
+
+@media (max-width: 760px) {
+  .kits-full {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .kits-full .kits-list {
+    grid-row: auto;
+  }
+
+  .kits-full .kits-who {
+    grid-column: auto;
+  }
+}
+
+.kits-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+}
+
+.kits-row h3,
+.kit-build-head h3 {
+  flex: 1;
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.kits-row h3.kit-detail-name {
+  font-size: 15px;
+  letter-spacing: -0.005em;
+  text-transform: none;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kits-card .danger {
+  color: var(--danger);
+}
+
+.kit-note {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.kit-note.small {
+  font-size: 11.5px;
+}
+
+/* The kits as cards; the chosen one lit. */
+.kit-cards {
+  display: grid;
+  gap: 8px;
+}
+
+.kit-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--card);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.kit-card:hover {
+  border-color: color-mix(in srgb, var(--tone) 40%, transparent);
+}
+
+.kit-card[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--tone) 65%, transparent);
+  background: linear-gradient(150deg, color-mix(in srgb, var(--tone) 13%, transparent), transparent 70%), var(--card);
+}
+
+.kit-card-text {
+  flex: 1 1 auto;
+  min-width: 72px;
+  display: grid;
+  gap: 2px;
+}
+
+.kit-card-name {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Only the chosen kit's name itself renames it. */
+.kit-card-name {
+  justify-self: start;
+  max-width: 100%;
+}
+
+.kit-card[aria-pressed="true"] .kit-card-name {
+  cursor: text;
+}
+
+.kit-card[aria-pressed="true"] .kit-card-name:hover {
+  text-decoration: underline dotted color-mix(in srgb, var(--tone) 70%, transparent);
+  text-underline-offset: 3px;
+}
+
+.kit-rename {
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--tone) 60%, transparent);
+  border-radius: 7px;
+  background: var(--inset);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text-strong);
+  outline: none;
+}
+
+.kit-card-count {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* Edit and Give, between the name and the pictures. */
+.kit-card-btns {
+  flex: none;
+  display: flex;
+  gap: 2px;
+}
+
+.kit-card-btns .icon-btn {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+}
+
+.kit-card-btns .kit-card-give:not(:disabled) {
+  border-color: color-mix(in srgb, var(--tone) 45%, transparent);
+  color: var(--tone);
+}
+
+.kit-card-btns .kit-card-give:not(:disabled):hover {
+  background: color-mix(in srgb, var(--tone) 16%, transparent);
+}
+
+/* As many whole pictures as there's room for (the name comes first; the rest wrap out of sight). */
+.kit-card-pics {
+  flex: 0 100 auto;
+  min-width: 0;
+  height: 28px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.kit-card-pics .kit-pic {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* An item's picture, or its initials in its category's colour until there is one. */
+.kit-pic {
+  --cat: var(--muted);
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.kit-pic img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  padding: 8%;
+  animation: fade-in 0.2s ease-out;
+}
+
+.kit-pic-alt {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--cat);
+}
+
+[data-cat="Weapon"] { --cat: #ef6a62; }
+[data-cat="Ammunition"] { --cat: #e6b450; }
+[data-cat="Attire"] { --cat: #a58cf2; }
+[data-cat="Medical"] { --cat: #4cc38a; }
+[data-cat="Food"] { --cat: #93c49a; }
+[data-cat="Tool"] { --cat: #e2a174; }
+[data-cat="Construction"] { --cat: #a9b0bc; }
+[data-cat="Items"] { --cat: #8ea5ea; }
+[data-cat="Resources"] { --cat: #c9a27a; }
+[data-cat="Component"] { --cat: #86b2d6; }
+[data-cat="Traps"] { --cat: #dc98bb; }
+[data-cat="Electrical"] { --cat: #6fc0d2; }
+[data-cat="Fun"] { --cat: #f0905c; }
+[data-cat="Misc"] { --cat: #80868f; }
+
+/* A kit's containers: what to wear, the belt, the inventory. */
+.kit-preview,
+.kit-build-body {
+  display: grid;
+  gap: 12px;
+}
+
+.kit-container {
+  display: grid;
+  gap: 6px;
+}
+
+.kit-container-name {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.kit-container-count {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  color: var(--faint);
+}
+
+.kit-slots {
+  --cols: 6;
+  display: grid;
+  grid-template-columns: repeat(var(--cols), minmax(0, 64px));
+  gap: 5px;
+}
+
+.kits-card ::-webkit-scrollbar {
+  width: 10px;
+}
+
+.kits-card ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.c-wear .kit-slots {
+  --cols: 7;
+}
+
+.kit-slot {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.kit-slot.filled {
+  border-color: var(--line-strong);
+  background: radial-gradient(80% 80% at 50% 35%, rgba(255, 255, 255, 0.07), transparent 75%), rgba(255, 255, 255, 0.04);
+}
+
+.kit-amount {
+  position: absolute;
+  right: 4px;
+  bottom: 2px;
+  font-size: 10.5px;
+  font-weight: 750;
+  color: var(--text-strong);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+  font-variant-numeric: tabular-nums;
+}
+
+.kit-build .kit-slot {
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+}
+
+.kit-build .kit-slot.filled {
+  cursor: grab;
+  touch-action: none;
+}
+
+/* A drag: the picture follows the pointer. */
+.kit-ghost {
+  position: fixed;
+  z-index: 100;
+  width: 60px;
+  height: 60px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--tone, #7ad3a8) 60%, transparent);
+  background: #2f323c;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -60%) rotate(-4deg);
+  pointer-events: none;
+}
+
+body.kit-dragging,
+body.kit-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+.item-tile.dragging {
+  opacity: 0.5;
+}
+
+/* The picker's picture size. */
+.kit-picker-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.kit-picker-head .kit-search-box {
+  flex: 1;
+}
+
+.kit-size {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.kit-size svg {
+  display: block;
+}
+
+.kit-size-small svg {
+  width: 12px;
+  height: 12px;
+}
+
+.kit-size-big svg {
+  width: 18px;
+  height: 18px;
+}
+
+.kit-size input {
+  width: 120px;
+  accent-color: var(--tone);
+}
+
+.kit-build .kit-slot.filled:hover {
+  border-color: color-mix(in srgb, var(--tone) 55%, transparent);
+}
+
+.kit-slot.drop {
+  border-color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 14%, transparent);
+}
+
+.kit-slot.dragging {
+  opacity: 0.35;
+}
+
+.kit-slot.added {
+  animation: kit-added 0.7s ease-out;
+}
+
+@keyframes kit-added {
+  from {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 70%, transparent);
+    transform: scale(1.06);
+  }
+}
+
+/* Who gets it. */
+.kit-give {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--card);
+}
+
+/* Who's online, each with Give; Give to all under them. */
+.kit-players {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.kit-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 4px 4px 4px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.kit-player-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent);
+}
+
+.kit-player-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-strong);
+}
+
+.kit-player .btn {
+  flex: none;
+}
+
+.kit-player .btn.done {
+  color: var(--ok);
+}
+
+.kit-give-all {
+  height: 40px;
+}
+
+/* The Give to list: a small window under its button. */
+.kit-menu {
+  position: fixed;
+  z-index: 30;
+  width: min(320px, calc(100vw - 20px));
+  max-height: min(480px, calc(100vh - 20px));
+  overflow-y: auto;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: #2f313b;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  --tone: #5fd39a;
+  animation: dd-in 0.12s ease-out;
+}
+
+.kit-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kit-menu-title {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+}
+
+.kit-menu-title strong {
+  font-size: 13.5px;
+  color: var(--text-strong);
+}
+
+.kit-menu-title span {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kit-give-to svg:last-child {
+  width: 12px;
+  height: 12px;
+  margin-right: -2px;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+/* ----- the editor: Rust's items on the left, the kit on the right ----- */
+.kit-editor {
+  position: relative;
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 400px);
+  gap: 18px;
+}
+
+.kit-picker {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.kit-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.kit-search-box svg {
+  position: absolute;
+  left: 12px;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.kit-search,
+.kit-name {
+  width: 100%;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--inset);
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--text-strong);
+  outline: none;
+}
+
+.kit-search {
+  padding-left: 36px;
+}
+
+.kit-search:focus,
+.kit-name:focus {
+  border-color: color-mix(in srgb, var(--tone) 60%, transparent);
+}
+
+.kit-tabs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
+  gap: 6px;
+}
+
+.kit-tab {
+  height: 34px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: #1d1f27;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.kit-tab:hover {
+  border-color: color-mix(in srgb, var(--cat) 45%, transparent);
+  color: var(--text-strong);
+}
+
+.kit-tab[aria-selected="true"] {
+  background: var(--accent);
+  color: #10142a;
+}
+
+.kit-tab[data-cat="All"] {
+  --cat: var(--accent);
+}
+
+/* While searching: how many each category finds (none: dimmed). */
+.kit-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.kit-tab-count {
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+  text-align: center;
+}
+
+.kit-tab[aria-selected="true"] .kit-tab-count {
+  background: rgba(16, 20, 42, 0.18);
+}
+
+.kit-tab.none:not([aria-selected="true"]) {
+  opacity: 0.45;
+}
+
+.kit-none {
+  grid-column: 1 / -1;
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+}
+
+.kit-grid {
+  --tile: 104px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--tile), 1fr));
+  align-content: start;
+  gap: 10px;
+  padding: 2px 4px 8px 0;
+}
+
+.item-tile {
+  display: grid;
+  grid-template-rows: calc(var(--tile) * 0.66) auto;
+  touch-action: none;
+  justify-items: center;
+  gap: 6px;
+  padding: 10px 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.01)), #1d1f27;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
+  transition: transform 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s;
+}
+
+.item-tile:hover,
+.item-tile:focus-visible {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--cat) 50%, transparent);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.3);
+  color: var(--text);
+  outline: none;
+}
+
+.item-tile .kit-pic {
+  width: calc(var(--tile) * 0.66);
+  height: calc(var(--tile) * 0.66);
+}
+
+.item-tile .kit-pic-alt {
+  font-size: 18px;
+}
+
+.item-tile-name {
+  width: 100%;
+  font-size: 11.5px;
+  line-height: 1.3;
+  text-align: center;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.kit-build {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--card);
+}
+
+.kit-build-head {
+  display: grid;
+  gap: 8px;
+}
+
+.kit-build-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  padding-right: 2px;
+}
+
+.kit-build-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* How many: next to the item that was clicked. */
+.amount-pop {
+  position: absolute;
+  z-index: 5;
+  width: 268px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--tone) 40%, var(--line-strong));
+  border-radius: 13px;
+  background: #2f323c;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  animation: fade-in 0.15s ease-out;
+}
+
+.amount-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.amount-head .kit-pic {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.amount-head strong {
+  display: block;
+  font-size: 13.5px;
+  color: var(--text-strong);
+}
+
+.amount-head span {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.amount-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.amount-label input {
+  width: 110px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--inset);
+  font: inherit;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-strong);
+  text-align: right;
+  outline: none;
+}
+
+.amount-label input:focus {
+  border-color: color-mix(in srgb, var(--tone) 60%, transparent);
+}
+
+.amount-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip-btn {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+}
+
+/* A stack goes in right away. */
+.chip-btn.stack {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text-strong);
+}
+
+.chip-btn:hover {
+  border-color: color-mix(in srgb, var(--tone) 55%, transparent);
+  color: var(--text-strong);
+}
+
+.amount-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* A narrow window: the kit under the items. */
+@media (max-width: 900px) {
+  .kit-editor {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1.25fr) minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .kit-tabs {
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  }
+
+  .kit-tab {
+    height: 30px;
+  }
+
+  /* Wear and belt side by side, the inventory under them. */
+  .kit-build-body {
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  }
+
+  .kit-build .kit-slots {
+    grid-template-columns: repeat(var(--cols), minmax(0, 46px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kit-slot.added {
+    animation: none;
+  }
+}
+
+/* ---------- Settings: dropped assets, by kind ---------- */
+.settings-page [data-tone="pink"] {
+  --tone: #e879b9;
+}
+
+.asset-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.asset-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 10px 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--card);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+
+.asset-kind svg {
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+}
+
+.asset-kind:hover {
+  border-color: color-mix(in srgb, var(--tone) 45%, transparent);
+  color: var(--text-strong);
+}
+
+.asset-kind[aria-selected="true"] {
+  border-color: color-mix(in srgb, var(--tone) 65%, transparent);
+  background: color-mix(in srgb, var(--tone) 14%, var(--card));
+  color: var(--text-strong);
+}
+
+.asset-kind[aria-selected="true"] svg {
+  color: var(--tone);
+}
+
+.asset-kind-count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 11px;
+  line-height: 20px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.asset-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 58px;
+  padding: 10px 12px 10px 16px;
+  cursor: pointer;
+  outline: none;
+  transition: background 0.15s;
+}
+
+.asset-row + .asset-row {
+  border-top: 1px solid var(--line);
+}
+
+.asset-row:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.asset-row:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--tone) 60%, transparent);
+}
+
+.asset-row.chosen {
+  background: color-mix(in srgb, var(--tone) 8%, transparent);
+}
+
+/* Can't be chosen (only its buttons do something): no circle, no hand. */
+.asset-row.fixed {
+  cursor: default;
+}
+
+.asset-row.fixed:not(.chosen) .asset-mark {
+  border-style: dashed;
+  opacity: 0.35;
+}
+
+.asset-row.missing .asset-title > span:first-child {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.asset-mark {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid var(--line-strong);
+}
+
+.asset-row.chosen .asset-mark {
+  border-color: transparent;
+  background: var(--tone);
+  color: #2a1020;
+}
+
+.asset-mark svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 3.2;
+}
+
+.asset-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.asset-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.asset-title > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-badge {
+  flex: none;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tone) 20%, transparent);
+  color: var(--tone);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 20px;
+}
+
+.asset-badge.bad {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.asset-sub {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-actions {
+  flex: none;
+  display: flex;
+  gap: 2px;
+}
+
+.asset-empty {
+  padding: 18px;
+}
+
+.asset-note .btn-link {
+  padding: 0;
+  height: auto;
+  font-size: inherit;
+  color: var(--tone);
+}
+
+/* ---------- the side column: Give items and Bug reports fold like the server card ---------- */
+.card.foldable.kits-card > .card-head > :first-child,
+.card.foldable.bugs-card > .card-head > :first-child {
+  flex: none;
+}
+
+/* The title in the middle of its icon, folded or not. */
+.kits-card > .card-head,
+.bugs-card > .card-head {
+  align-items: center;
+}
+
+.kits-card.maximized .fold-btn {
+  display: none;
+}
+
+.bugs-card {
+  --tone: #ef8a6a;
+  flex: none;
+}
+
+body.simple .bugs-card {
+  display: none;
+}
+
+.bugs-head {
+  gap: 10px;
+}
+
+.bugs-head h2 {
+  margin: 0;
+}
+
+.bugs-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: linear-gradient(150deg, color-mix(in srgb, var(--tone) 32%, transparent), color-mix(in srgb, var(--tone) 10%, transparent));
+  color: var(--tone);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 38%, transparent);
+}
+
+.bugs-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.bugs-count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--tone);
+  color: #2a120a;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 20px;
+  text-align: center;
+}
+
+.bugs-body {
+  display: grid;
+  gap: 10px;
+}
+
+.bugs-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.bugs-status .status-dot {
+  margin-top: 5px;
+}
+
+.bugs-on {
+  justify-self: start;
+}
+
+.bugs-list {
+  display: grid;
+  gap: 6px;
+}
+
+.bugs-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--inset);
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.bugs-item:hover {
+  border-color: color-mix(in srgb, var(--tone) 50%, transparent);
+}
+
+.bugs-n {
+  flex: none;
+  font-size: 12px;
+  font-weight: 750;
+  color: var(--tone);
+}
+
+.bugs-text {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.bugs-text strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bugs-text span {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- Settings: the whitelist (who can join) ---------- */
+.set-row.disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.wl {
+  display: grid;
+  gap: 12px;
+  padding: 4px 18px 16px;
+}
+
+.wl.off .wl-list {
+  opacity: 0.55;
+}
+
+.wl-list {
+  display: grid;
+  gap: 4px;
+}
+
+.wl-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 46px;
+  padding: 6px 8px 6px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.wl-pic {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--tone) 18%, transparent);
+  color: var(--text-strong);
+  font-weight: 750;
+}
+
+.wl-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+}
+
+.wl-text b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-strong);
+}
+
+.wl-text code {
+  justify-self: start;
+  padding: 0;
+  background: none;
+  font: 12px var(--mono);
+  color: var(--muted);
+}
+
+.wl-pic svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wl-badge {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tone) 18%, transparent);
+  color: var(--tone);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.wl-add {
+  display: flex;
+  gap: 8px;
+}
+
+.wl-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.wl-need {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.wl-need > svg {
+  width: 16px;
+  height: 16px;
+  color: var(--tone);
+}
+
+.wl-need > span {
+  flex: 1 1 220px;
+}
+
+/* "Built in": what comes with DropLaunch (the procedural map's start file, English, Basic Build Kit). */
+.builtin-tag {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.kit-card-count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The chosen kit's name with its tag right after it. */
+.kits-row h3.kit-detail-name:has(+ .builtin-tag) {
+  flex: 0 1 auto;
+}
+
+.kits-row h3.kit-detail-name + .builtin-tag {
+  margin-right: auto;
+}
+
+/* Settings → About: Reset everything. */
+.set-row.set-danger .set-title,
+.set-row.set-danger .set-go {
+  color: var(--danger);
+}

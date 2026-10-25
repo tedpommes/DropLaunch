@@ -1,0 +1,214 @@
+{
+ "mode": "conpty",
+ "exit_code": 0,
+ "args": [
+  "+@ShutdownOnFailedCommand",
+  "1",
+  "+@NoPromptForPassword",
+  "1",
+  "+force_install_dir",
+  "C:\\Users\\TP\\Desktop\\Droplaaauc\\Server_Files",
+  "+login",
+  "anonymous",
+  "+app_update",
+  "258550",
+  "-beta",
+  "public",
+  "+quit"
+ ],
+ "events": [
+  {
+   "t": 0.017,
+   "src": "PTY",
+   "bytes": 16,
+   "raw": "\u001b[?9001h\u001b[?1004h"
+  },
+  {
+   "t": 0.028,
+   "src": "PTY",
+   "bytes": 160,
+   "raw": "\u001b[?25l\u001b[2J\u001b[m\u001b[HRedirecting stderr to 'C:\\Users\\TP\\Desktop\\Droplaaauc\\SteamCMD\\logs\\stderr.txt'\r\n\u001b]0;C:\\Users\\TP\\Desktop\\Droplaaauc\\SteamCMD\\steamcmd.exe\u0007\u001b[?25h"
+  },
+  {
+   "t": 0.037,
+   "src": "PTY",
+   "bytes": 109,
+   "raw": "Logging directory: 'C:\\Users\\TP\\Desktop\\Droplaaauc\\SteamCMD/logs'\r\n[  0%] Checking for available updates...\r\n"
+  },
+  {
+   "t": 7.657,
+   "src": "PTY",
+   "bytes": 34,
+   "raw": "[----] Verifying installation...\r\n"
+  },
+  {
+   "t": 7.736,
+   "src": "PTY",
+   "bytes": 42,
+   "raw": "Steam Console Client (c) Valve Corporation"
+  },
+  {
+   "t": 7.75,
+   "src": "PTY",
+   "bytes": 70,
+   "raw": " - version 1788292693\r\n-- type 'quit' to exit --\r\nLoading Steam API..."
+  },
+  {
+   "t": 7.787,
+   "src": "PTY",
+   "bytes": 4,
+   "raw": "OK\r\n"
+  },
+  {
+   "t": 7.839,
+   "src": "LOG",
+   "text": ""
+  },
+  {
+   "t": 7.839,
+   "src": "LOG",
+   "text": ""
+  },
+  {
+   "t": 7.839,
+   "src": "LOG",
+   "text": "[2026-10-07 01:58:53] Client version: 1788292693"
+  },
+  {
+   "t": 7.839,
+   "src": "LOG",
+   "text": "[2026-10-07 01:58:53] Loading Steam API..."
+  },
+  {
+   "t": 7.839,
+   "src": "LOG",
+   "text": "[2026-10-07 01:58:53] OK"
+  },
+  {
+   "t": 7.858,
+   "src": "PTY",
+   "bytes": 34,
+   "raw": "\"@ShutdownOnFailedCommand\" = \"1\"\r\n"
+  },
+  {
+   "t": 7.889,
+   "src": "PTY",
+   "bytes": 30,
+   "raw": "\"@NoPromptForPassword\" = \"1\"\r\n"
+  },
+  {
+   "t": 7.946,
+   "src": "LOG",
+   "text": "[2026-10-07 01:58:53] \"@ShutdownOnFailedCommand\" = \"1\""
+  },
+  {
+   "t": 7.946,
+   "src": "LOG",
+   "text": "[2026-10-07 01:58:53] \"@NoPromptForPassword\" = \"1\""
+  },
+  {
+   "t": 7.951,
+   "src": "PTY",
+   "bytes": 43,
+   "raw": "\r\nConnecting anonymously to Steam Public..."
+  },
+  {
+   "t": 8.053,
+   "src": "LOG",
+   "text": "[2026-10-07 01:58:53] "
+  },
+  {
+   "t": 8.053,
+   "src": "LOG",
+   "text": "Connecting anonymously to Steam Public..."
+  },
+  {
+   "t": 16.368,
+   "src": "PTY",
+   "bytes": 4,
+   "raw": "OK\r\n"
+  },
+  {
+   "t": 16.384,
+   "src": "PTY",
+   "bytes": 28,
+   "raw": "Waiting for client config..."
+  },
+  {
+   "t": 16.395,
+   "src": "LOG",
+   "text": "[2026-10-07 01:59:01] OK"
+  },
+  {
+   "t": 16.395,
+   "src": "LOG",
+   "text": "[2026-10-07 01:59:01] Waiting for client config..."
+  },
+  {
+   "t": 17.3,
+   "src": "PTY",
+   "bytes": 4,
+   "raw": "OK\r\n"
+  },
+  {
+   "t": 17.315,
+   "src": "PTY",
+   "bytes": 28,
+   "raw": "Waiting for user info...OK\r\n"
+  },
+  {
+   "t": 17.405,
+   "src": "LOG",
+   "text": "[2026-10-07 01:59:02] OK"
+  },
+  {
+   "t": 17.405,
+   "src": "LOG",
+   "text": "[2026-10-07 01:59:02] Waiting for user info..."
+  },
+  {
+   "t": 17.405,
+   "src": "LOG",
+   "text": "[2026-10-07 01:59:02] OK"
+  },
+  {
+   "t": 17.673,
+   "src": "PTY",
+   "bytes": 43,
+   "raw": "Success! App '258550' already up to date.\r\n"
+  },
+  {
+   "t": 17.712,
+   "src": "LOG",
+   "text": "[2026-10-07 01:59:02] Success! App '258550' already up to date."
+  },
+  {
+   "t": 17.736,
+   "src": "PTY",
+   "bytes": 22,
+   "raw": "Unloading Steam API..."
+  },
+  {
+   "t": 17.817,
+   "src": "LOG",
+   "text": "[2026-10-07 01:59:03] Unloading Steam API..."
+  },
+  {
+   "t": 17.831,
+   "src": "PTY",
+   "bytes": 4,
+   "raw": "OK\r\n"
+  },
+  {
+   "t": 17.87,
+   "src": "PTY",
+   "bytes": 16,
+   "raw": "\u001b[?9001l\u001b[?1004l"
+  },
+  {
+   "t": 17.918,
+   "src": "LOG",
+   "text": "[2026-10-07 01:59:03] OK"
+  }
+ ]
+}
