@@ -1,2 +1,3 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Keep every file byte-for-byte as it is (no line-ending changes): the tests replay raw
+# SteamCMD captures and compare license texts exactly.
+* -text
