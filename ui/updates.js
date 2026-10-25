@@ -5,7 +5,7 @@
 import { $, invoke, Channel, fmtBytes, toast } from "./util.js";
 import { t } from "./i18n.js";
 
-const RELEASES = "https://github.com/tedpommes/Rust-DropLaunch/releases/latest";
+const RELEASES = "https://github.com/tedpommes/DropLaunch/releases/latest";
 const RECHECK_MS = 6 * 3600 * 1000;
 
 export function initUpdates(ctx) {

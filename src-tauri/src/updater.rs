@@ -17,7 +17,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub const REPO: &str = "tedpommes/Rust-DropLaunch";
+pub const REPO: &str = "tedpommes/DropLaunch";
 /// The exe in a release, and the file that describes the release.
 pub const EXE_NAME: &str = "DropLaunch.exe";
 pub const MANIFEST_NAME: &str = "latest.json";
