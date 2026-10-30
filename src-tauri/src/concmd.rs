@@ -5,6 +5,7 @@
 //! attributes, Oxide's from its literals plus a few well-known ones.
 
 use crate::t;
+use crate::sync::Locked;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -35,7 +36,7 @@ pub fn list(server_dir: &Path) -> Vec<Command> {
         .iter()
         .filter_map(|f| std::fs::metadata(f).ok().map(|m| (f.clone(), m.modified().ok(), m.len())))
         .collect();
-    if let Some((cached_key, commands)) = CACHE.lock().unwrap().as_ref() {
+    if let Some((cached_key, commands)) = CACHE.locked().as_ref() {
         if *cached_key == key {
             return commands.clone();
         }
@@ -63,7 +64,7 @@ pub fn list(server_dir: &Path) -> Vec<Command> {
         }
         a.name == b.name
     });
-    *CACHE.lock().unwrap() = Some((key, commands.clone()));
+    *CACHE.locked() = Some((key, commands.clone()));
     commands
 }
 

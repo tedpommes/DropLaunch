@@ -19,18 +19,25 @@ path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2.7", features = [] }
+# en.json goes into the exe compressed (build.rs); the same brotli Tauri uses for the UI's files.
+brotli = "9"
 
 [dependencies]
-tauri = { version = "2.12", features = [] }
+# Without the default "dynamic-acl" (the command permissions are checked from a list built in at
+# compile time instead of one loaded at runtime: a smaller exe) and the Linux-only x11/dbus.
+tauri = { version = "2.12", default-features = false, features = ["wry", "compression", "common-controls-v6"] }
 tauri-plugin-dialog = "2.8"
 tauri-plugin-single-instance = "2.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 regex = "1"
+brotli = "9"
 portable-pty = "0.9"
-ureq = "2.12"
-zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+# HTTPS: Windows' own TLS there (native-tls, below), rustls elsewhere.
+ureq = { version = "2.12", default-features = false, features = ["gzip"] }
+# Unpacked with miniz_oxide, the decompressor the HTTP client already brings along.
+zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 notify = "8"
 blake3 = "1"
@@ -62,6 +69,12 @@ windows-sys = { version = "0.61", features = [
 ] }
 # Windows notifications (WinRT); the same version Tauri already uses.
 windows = { version = "0.62", features = ["Foundation", "Data_Xml_Dom", "UI_Notifications", "Win32_System_Com"] }
+# HTTPS with Windows' own TLS (SChannel) and certificates: no TLS library in the exe.
+ureq = { version = "2.12", default-features = false, features = ["native-tls"] }
+native-tls = "0.2"
+
+[target.'cfg(not(windows))'.dependencies]
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
 
 [target.'cfg(unix)'.dependencies]
 flate2 = "1"
@@ -76,5 +89,5 @@ custom-protocol = ["tauri/custom-protocol"]
 [profile.release]
 codegen-units = 1
 lto = true
-opt-level = "s"
+opt-level = "z"
 strip = true

@@ -81,6 +81,8 @@ export function initKits(ctx) {
   let drawnKey = "";
   /** The kits that come with DropLaunch (a "Built in" tag), by id. */
   let builtIns = new Set();
+  /** A kit was given since DropLaunch started (Getting started ticks its step). */
+  let gaveAny = false;
   const builtInTag = (kit) => (builtIns.has(kit.id) ? el("span", { class: "builtin-tag", text: t("common.builtIn") }) : null);
 
   const live = () => Boolean(ctx.server?.isLive()) && ctx.server?.view()?.phase === "ready";
@@ -493,6 +495,7 @@ export function initKits(ctx) {
     redraw();
     try {
       const r = await invoke("kit_give", { kit, players: ids });
+      gaveAny = true;
       toast([tn("kits.given", r.players, { name: kit.name }), r.exact ? "" : t("kits.given.loose")].filter(Boolean).join(" "), "ok");
       const marks = ids.map((id) => `${kit.id}:${id}`);
       for (const m of marks) given.add(m);
@@ -998,6 +1001,15 @@ export function initKits(ctx) {
     selectedId: () => current()?.id ?? null,
     select(id) {
       selected = id;
+      render(true);
+    },
+    /** A kit was given (the guide's step). */
+    gave: () => gaveAny,
+    /** The kit that comes with DropLaunch picked, if it's still there (the guide's Show me). */
+    pickBuiltIn() {
+      const kit = kits.find((k) => builtIns.has(k.id));
+      if (!kit || editing) return;
+      selected = kit.id;
       render(true);
     },
     /** The kits again from their files (they may have changed in Settings). */

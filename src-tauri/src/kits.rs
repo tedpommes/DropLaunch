@@ -404,11 +404,7 @@ pub fn icon(data: &Path, item: &str) -> Result<Vec<u8>> {
         bail!("no picture for {item}");
     }
     std::fs::create_dir_all(&dir)?;
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(8))
-        .timeout_read(Duration::from_secs(15))
-        .user_agent(concat!("DropLaunch/", env!("CARGO_PKG_VERSION")))
-        .build();
+    let agent = crate::http::agent(Duration::from_secs(8), Duration::from_secs(15));
     for source in ICON_SOURCES {
         let Ok(response) = agent.get(&source.replace("{}", item)).call() else { continue };
         if !response.content_type().starts_with("image/") {

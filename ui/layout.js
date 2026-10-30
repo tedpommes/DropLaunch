@@ -141,7 +141,10 @@ function columnSplit(ctx) {
       const weight = on && weights && shown(name) ? weights[name] : null;
       card().style.flex = weight == null ? "" : `${weight} 1 0`;
     }
-    $("server-panel").classList.toggle("sized", on && Boolean(weights?.sized) && shown("server"));
+    // Looked at again every time the card changes, not only when dragged: while a server boots its
+    // own part is tall (the boot steps), and once it's ready the room left over goes to the output.
+    const sized = on && shown("server") && weights?.server != null && weights.server >= serverOwn() + SERVER_LOG_ROOM;
+    $("server-panel").classList.toggle("sized", sized);
     if (on) $("splitter").hidden = !shown("server");
   }
 
@@ -158,7 +161,7 @@ function columnSplit(ctx) {
   /** Where the line between two cards can go. */
   function limits(upper, lower) {
     const min = (name) => (name === "server" ? Math.max(MIN.server, serverOwn()) : MIN[name]);
-    return { minUpper: min(upper), minLower: min(lower), own: serverOwn() };
+    return { minUpper: min(upper), minLower: min(lower) };
   }
 
   function measure() {
@@ -173,7 +176,7 @@ function columnSplit(ctx) {
       if (e.button !== 0 || ctx.expanded) return;
       const [upper, lower] = pair();
       if (!upper || !lower) return;
-      weights = { ...measure(), sized: Boolean(weights?.sized) };
+      weights = measure();
       drag = { y: e.clientY, upper, lower, a: weights[upper], total: weights[upper] + weights[lower], ...limits(upper, lower), moved: false };
       splitter.setPointerCapture(e.pointerId);
       splitter.classList.add("dragging");
@@ -209,7 +212,7 @@ function columnSplit(ctx) {
       const [upper, lower] = pair();
       if (!upper || !lower) return;
       e.preventDefault();
-      weights = { ...measure(), sized: Boolean(weights?.sized) };
+      weights = measure();
       move({ upper, lower, total: weights[upper] + weights[lower], ...limits(upper, lower) }, weights[upper] + (e.key === "ArrowUp" ? -24 : 24));
       save(COLUMN_KEY, JSON.stringify(weights));
       ctx.onResize?.();
@@ -221,8 +224,7 @@ function columnSplit(ctx) {
     const a = Math.max(d.minUpper, Math.min(d.total - d.minLower, height));
     weights[d.upper] = a;
     weights[d.lower] = d.total - a;
-    // The server's output shows once there's room for it.
-    if (weights.server != null) weights.sized = weights.server >= d.own + SERVER_LOG_ROOM;
+    // (apply shows the server's output once there's room for it.)
     apply();
   }
 

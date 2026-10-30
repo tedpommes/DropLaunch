@@ -155,8 +155,8 @@
           </div>
         </section>
         <section class="card server-panel" id="server-panel"></section>
-        <!-- Kits ("Give items"): a kit and Give to; full screen (its expand button) for everything (kits.js) -->
-        <section class="card foldable kits-card" id="kits-card" hidden>
+        <!-- Kits ("Give items"): a kit and Give to; full screen (its expand button) for everything (kits.js). Starts folded, like Bug reports. -->
+        <section class="card foldable kits-card" id="kits-card" data-start-folded hidden>
           <div class="card-head kits-head">
             <button class="btn btn-small btn-ghost back-btn" id="kits-back" data-t-title="common.backEsc"><svg><use href="#i-arrow-left" /></svg><span data-t="common.back"></span></button>
             <span class="kits-icon"><svg><use href="#i-gift" /></svg></span>
@@ -168,7 +168,7 @@
           <div class="kits-main" id="kits-main"></div>
         </section>
         <!-- Bug reports: testers' /bug from Rust's chat, the newest open ones; the page for all (playtest.js) -->
-        <section class="card foldable bugs-card" id="bugs-card">
+        <section class="card foldable bugs-card" id="bugs-card" data-start-folded>
           <div class="card-head bugs-head">
             <span class="bugs-icon"><svg><use href="#i-bug" /></svg></span>
             <h2 data-t="playtest.reports"></h2>
@@ -356,92 +356,106 @@
           </div>
         </div>
 
-        <ul class="reqs" id="setup-reqs">
-          <li data-req="steamcmd">
-            <span class="req-icon"><svg class="ok"><use href="#i-check" /></svg><svg class="bad"><use href="#i-x" /></svg></span>
-            <div><strong data-t="setup.req.steamcmd"></strong><span class="req-note"></span></div>
-          </li>
-          <li data-req="server">
-            <span class="req-icon"><svg class="ok"><use href="#i-check" /></svg><svg class="bad"><use href="#i-x" /></svg></span>
-            <div><strong data-t="setup.req.server"></strong><span class="req-note"></span></div>
-          </li>
-        </ul>
+        <!-- 1: what's downloaded and where (a click on a folder changes it); while it runs, how far it is -->
+        <section class="setup-step">
+          <span class="step-num">1</span>
+          <div class="step-body">
+            <div class="step-head">
+              <h3 id="setup-step-download" data-t="setup.step.download"></h3>
+              <span class="spacer"></span>
+              <div class="opt-row" id="setup-branch-row">
+                <span class="opt-label" data-t="common.branch"></span>
+                <select id="setup-branch" data-size="sm" data-t-label="common.branch"></select>
+              </div>
+            </div>
+            <ul class="reqs" id="setup-reqs">
+              <li data-req="steamcmd">
+                <span class="req-icon"><svg class="ok"><use href="#i-check" /></svg><svg class="bad"><use href="#i-x" /></svg></span>
+                <div><strong data-t="setup.req.steamcmd"></strong><span class="req-note"></span></div>
+              </li>
+              <li data-req="server">
+                <span class="req-icon"><svg class="ok"><use href="#i-check" /></svg><svg class="bad"><use href="#i-x" /></svg></span>
+                <div><strong data-t="setup.req.server"></strong><span class="req-note"></span></div>
+              </li>
+            </ul>
+            <ol class="tasks" id="setup-tasks" hidden>
+              <li data-task="steamcmd"><span class="task-icon"></span><div class="task-body"><div class="task-title" data-t="setup.task.steamcmd"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>
+              <li data-task="server"><span class="task-icon"></span><div class="task-body"><div class="task-title" data-t="setup.task.server"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>
+              <li data-task="framework"><span class="task-icon"></span><div class="task-body"><div class="task-title" id="task-framework-title" data-t="common.modFramework"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>
+              <li data-task="startfile"><span class="task-icon"></span><div class="task-body"><div class="task-title" data-t="setup.task.startfile"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>            </ol>
+            <div class="setup-log" id="setup-log" hidden></div>
+          </div>
+        </section>
 
+        <!-- 2 and 3: the choices, also while the files download (they're used once the download is done).
+             What works without mods comes first; the mod options show once Carbon or Oxide is picked. -->
         <div class="setup-options" id="setup-options">
-          <p class="setup-live-note" id="setup-live-note" hidden data-t="setup.liveNote"></p>
-          <div class="opt-row" id="setup-branch-row">
-            <span class="opt-label" data-t="common.branch"></span>
-            <select id="setup-branch" data-size="sm" data-t-label="common.branch"></select>
-          </div>
-          <div class="opt-row">
-            <span class="opt-label" data-t="common.modFramework"></span>
-            <div class="segmented" role="radiogroup" data-t-label="common.modFramework" id="setup-framework">
-              <button type="button" role="radio" data-value="none" data-t="framework.none"></button>
-              <button type="button" role="radio" data-value="carbon" data-t="framework.carbon"></button>
-              <button type="button" role="radio" data-value="oxide" data-t="framework.oxide"></button>
+          <section class="setup-step">
+            <span class="step-num">2</span>
+            <div class="step-body">
+              <div class="step-head"><h3 data-t="setup.step.extras"></h3></div>
+              <div class="setup-group">
+                <label class="check" id="setup-owner-row">
+                  <input type="checkbox" id="setup-owner" />
+                  <span class="box"><svg><use href="#i-check" /></svg></span>
+                  <span class="check-text"><span data-t="setup.owner"></span><span class="opt-info" tabindex="0"><svg><use href="#i-info" /></svg><span class="opt-tip" data-t="setup.owner.note"></span></span></span>
+                </label>
+                <div class="owner-field" id="setup-owner-field" hidden>
+                  <div class="owner-row">
+                    <input class="text-input" id="setup-owner-id" data-t-placeholder="setup.owner.placeholder" spellcheck="false" autocomplete="off" />
+                    <button class="btn btn-small btn-primary" type="button" id="setup-owner-detect" data-t-title="setup.owner.detect.title"><svg><use href="#i-search" /></svg><span data-t="setup.owner.detect"></span></button>
+                  </div>
+                  <div class="owner-accounts" id="setup-owner-accounts" hidden></div>
+                  <div class="owner-hint" id="setup-owner-hint"></div>
+                </div>
+                <label class="check">
+                  <input type="checkbox" id="setup-start" checked />
+                  <span class="box"><svg><use href="#i-check" /></svg></span>
+                  <span class="check-text"><span id="setup-start-label" data-t="setup.start"></span><span class="opt-info" tabindex="0" id="setup-start-info"><svg><use href="#i-info" /></svg><span class="opt-tip" data-t="setup.start.note"></span></span></span>
+                </label>
+                <label class="check check-sub" id="setup-prefab-row" hidden>
+                  <input type="checkbox" id="setup-prefab" />
+                  <span class="box"><svg><use href="#i-check" /></svg></span>
+                  <span class="check-text"><span data-t="setup.prefab"></span><span class="opt-info" tabindex="0"><svg><use href="#i-info" /></svg><span class="opt-tip" data-t="setup.prefab.note"></span></span></span>
+                </label>
+              </div>
             </div>
-          </div>
-          <label class="check" id="setup-owner-row">
-            <input type="checkbox" id="setup-owner" />
-            <span class="box"><svg><use href="#i-check" /></svg></span>
-            <span><span data-t="setup.owner"></span> <em data-t="setup.owner.note"></em></span>
-          </label>
-          <div class="owner-field" id="setup-owner-field" hidden>
-            <div class="owner-row">
-              <input class="text-input" id="setup-owner-id" data-t-placeholder="setup.owner.placeholder" spellcheck="false" autocomplete="off" />
-              <button class="btn btn-small btn-ghost" type="button" id="setup-owner-detect" data-t-title="setup.owner.detect.title"><svg><use href="#i-search" /></svg><span data-t="setup.owner.detect"></span></button>
+          </section>
+          <section class="setup-step">
+            <span class="step-num">3</span>
+            <div class="step-body">
+              <div class="step-head"><h3 data-t="setup.step.mods"></h3></div>
+              <div class="framework-cards" role="radiogroup" data-t-label="common.modFramework" id="setup-framework">
+                <button type="button" role="radio" data-value="none"><b data-t="framework.none"></b></button>
+                <button type="button" role="radio" data-value="carbon"><b data-t="framework.carbon"></b><small data-t="setup.framework.carbon"></small></button>
+                <button type="button" role="radio" data-value="oxide"><b data-t="framework.oxide"></b></button>
+              </div>
+              <!-- Only with Carbon or Oxide: what they make possible -->
+              <div class="setup-group" id="setup-mod-options">
+                <label class="check" id="setup-rustedit-row">
+                  <input type="checkbox" id="setup-rustedit" checked />
+                  <span class="box"><svg><use href="#i-check" /></svg></span>
+                  <span class="check-text"><span data-t="setup.rustedit"></span><span class="opt-info" tabindex="0"><svg><use href="#i-info" /></svg><span class="opt-tip" data-t="setup.rustedit.note"></span></span></span>
+                </label>
+                <label class="check" id="setup-playtest-row">
+                  <input type="checkbox" id="setup-playtest" />
+                  <span class="box"><svg><use href="#i-check" /></svg></span>
+                  <span class="check-text"><span data-t="plugin.add"></span><span class="opt-info" tabindex="0"><svg><use href="#i-info" /></svg><span class="opt-tip" data-t="setup.plugin.note"></span></span></span>
+                </label>
+                <label class="check" id="setup-whitelist-row" hidden>
+                  <input type="checkbox" id="setup-whitelist" checked />
+                  <span class="box"><svg><use href="#i-check" /></svg></span>
+                  <span class="check-text"><span data-t="setup.whitelist"></span><span class="opt-info" tabindex="0"><svg><use href="#i-info" /></svg><span class="opt-tip" data-t="setup.whitelist.note"></span></span></span>
+                </label>
+                <label class="check" id="setup-profiler-row" hidden>
+                  <input type="checkbox" id="setup-profiler" />
+                  <span class="box"><svg><use href="#i-check" /></svg></span>
+                  <span class="check-text"><span data-t="setup.profiler"></span><span class="opt-info" tabindex="0"><svg><use href="#i-info" /></svg><span class="opt-tip" data-t="setup.profiler.note"></span></span></span>
+                </label>
+              </div>
             </div>
-            <div class="owner-accounts" id="setup-owner-accounts" hidden></div>
-            <div class="owner-hint" id="setup-owner-hint"></div>
-          </div>
-          <hr class="opt-sep" />
-          <label class="check" id="setup-rustedit-row">
-            <input type="checkbox" id="setup-rustedit" checked />
-            <span class="box"><svg><use href="#i-check" /></svg></span>
-            <span><span data-t="setup.rustedit"></span> <em data-t="setup.rustedit.note"></em></span>
-          </label>
-          <label class="check" id="setup-playtest-row">
-            <input type="checkbox" id="setup-playtest" />
-            <span class="box"><svg><use href="#i-check" /></svg></span>
-            <span><span data-t="plugin.add"></span> <em data-t="setup.plugin.note"></em></span>
-          </label>
-          <hr class="opt-sep" />
-          <label class="check" id="setup-whitelist-row">
-            <input type="checkbox" id="setup-whitelist" checked />
-            <span class="box"><svg><use href="#i-check" /></svg></span>
-            <span><span data-t="setup.whitelist"></span> <em id="setup-whitelist-note" data-t="setup.whitelist.note"></em></span>
-          </label>
-          <label class="check" id="setup-backup-row">
-            <input type="checkbox" id="setup-backup" checked />
-            <span class="box"><svg><use href="#i-check" /></svg></span>
-            <span><span data-t="setup.backup"></span> <em data-t="setup.backup.note"></em></span>
-          </label>
-          <hr class="opt-sep" />
-          <label class="check" id="setup-profiler-row" hidden>
-            <input type="checkbox" id="setup-profiler" />
-            <span class="box"><svg><use href="#i-check" /></svg></span>
-            <span><span data-t="setup.profiler"></span> <em data-t="setup.profiler.note"></em></span>
-          </label>
-          <label class="check">
-            <input type="checkbox" id="setup-start" checked />
-            <span class="box"><svg><use href="#i-check" /></svg></span>
-            <span id="setup-start-label"><span data-t="setup.start"></span> <em data-t="setup.start.note"></em></span>
-          </label>
-          <label class="check check-sub" id="setup-prefab-row" hidden>
-            <input type="checkbox" id="setup-prefab" />
-            <span class="box"><svg><use href="#i-check" /></svg></span>
-            <span><span data-t="setup.prefab"></span> <em data-t="setup.prefab.note"></em></span>
-          </label>
+          </section>
         </div>
-
-        <ol class="tasks" id="setup-tasks" hidden>
-          <li data-task="steamcmd"><span class="task-icon"></span><div class="task-body"><div class="task-title" data-t="setup.task.steamcmd"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>
-          <li data-task="server"><span class="task-icon"></span><div class="task-body"><div class="task-title" data-t="setup.task.server"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>
-          <li data-task="framework"><span class="task-icon"></span><div class="task-body"><div class="task-title" id="task-framework-title" data-t="common.modFramework"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>
-          <li data-task="startfile"><span class="task-icon"></span><div class="task-body"><div class="task-title" data-t="setup.task.startfile"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>
-          <li data-task="launch"><span class="task-icon"></span><div class="task-body"><div class="task-title" id="task-launch-title" data-t="setup.task.launch"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>
-        </ol>
-        <div class="setup-log" id="setup-log" hidden></div>
 
         <div class="setup-result" id="setup-result" hidden>
           <span class="result-icon"><svg id="setup-result-svg"><use href="#i-check" /></svg></span>

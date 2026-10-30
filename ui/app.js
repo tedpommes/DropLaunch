@@ -45,6 +45,7 @@ const ctx = {
   refresh,
   openSetup,
   setTab,
+  setExpanded,
   showFiles,
   spaceTag,
   reapplyOxide,
@@ -856,8 +857,8 @@ let countdownTimer = null;
 
 /**
  * @param {object|null} pendingMap a dropped map to start once setup is done
- * @param {{auto?: boolean, branch?: string}} opts auto: start right away (a map dropped on a
- *   fresh install); branch: set up this branch next to the installed ones
+ * @param {{auto?: boolean, branch?: string}} opts auto: start right away (Set up on the welcome
+ *   screen, a map dropped on a fresh install); branch: set up this branch next to the installed ones
  */
 async function openSetup(pendingMap = null, { auto = false, branch = null } = {}) {
   if (busy) return;
@@ -879,19 +880,16 @@ async function openSetup(pendingMap = null, { auto = false, branch = null } = {}
   wanted.profiler = Boolean(state.profiler);
   // On by default the first time; afterwards as it's set.
   wanted.whitelist = needed ? true : Boolean(state.whitelist);
-  // On by default the first time; afterwards as it's set.
-  $("setup-backup").checked = needed || state.backupClientMaps !== false;
   $("setup-prefab").checked = false;
   // Not over a server that runs (it would have to stop first).
   $("setup-start").checked = !(branch && ctx.server?.isLive());
   syncPrefabOption();
   const startLabel = $("setup-start-label");
   $("setup-prefab-row").hidden = !setupState.startMap;
-  if (setupState.startMap) {
-    startLabel.replaceChildren(...rich("setup.start.map", { map: setupState.startMap.name }));
-  } else {
-    startLabel.replaceChildren(el("span", { text: t("setup.start") }), " ", el("em", { text: t("setup.start.note") }));
-  }
+  // A dropped map starts instead of the test map: its name, and no (i) about the test map.
+  $("setup-start-info").hidden = Boolean(setupState.startMap);
+  if (setupState.startMap) startLabel.replaceChildren(...rich("setup.start.map", { map: setupState.startMap.name }));
+  else startLabel.textContent = t("setup.start");
   renderFrameworkPicker();
   const accounts = renderOwner();
 
@@ -1132,6 +1130,8 @@ function ownerChanged() {
   input.classList.remove("bad");
   const id = input.value.trim();
   renderAccounts(id);
+  // Nothing entered and nothing looked up yet: Detect calls for attention.
+  $("setup-owner-detect").classList.toggle("attention", on && !id && !steamAccounts.length);
   const hint = $("setup-owner-hint");
   hint.classList.remove("bad");
   const local = steamAccounts.find((a) => a.steamId === id);
@@ -1202,36 +1202,34 @@ function renderFrameworkPicker() {
     b.setAttribute("aria-checked", String(b.dataset.value === setupState.framework));
   }
   const none = setupState.framework === "none";
-  // Without a framework they can't work: unticked, and ticked again as wanted with Carbon or Oxide.
-  for (const key of ["rustedit", "playtest"]) {
-    $(`setup-${key}`).disabled = none;
-    $(`setup-${key}`).checked = !none && wanted[key];
-    $(`setup-${key}-row`).classList.toggle("disabled", none);
-  }
+  // Without a framework they can't work: hidden, and ticked again as wanted with Carbon or Oxide.
+  $("setup-mod-options").hidden = none;
+  for (const key of ["rustedit", "playtest"]) $(`setup-${key}`).checked = !none && wanted[key];
   const carbon = setupState.framework === "carbon";
   $("setup-profiler-row").hidden = !carbon;
   $("setup-profiler").checked = carbon && wanted.profiler;
   renderWhitelistOption();
 }
 
-/** The whitelist lets the owner in, and the DropLaunch plugin checks it: both are needed. */
+/** The whitelist lets the owner in, and the DropLaunch plugin checks it: both are needed, so it
+ * only shows with the owner on (and with the other mod options). */
 function renderWhitelistOption() {
   const framework = (setupState.framework ?? "none") !== "none";
   const owner = $("setup-owner").checked;
   const usable = framework && owner;
   $("setup-whitelist").disabled = !usable;
   $("setup-whitelist").checked = usable && wanted.whitelist !== false;
-  $("setup-whitelist-row").classList.toggle("disabled", !usable);
-  $("setup-whitelist-note").textContent = !framework ? t("setup.whitelist.needsFramework") : !owner ? t("setup.whitelist.needsOwner") : t("setup.whitelist.note");
+  $("setup-whitelist-row").hidden = !owner;
 }
 
-/** options -> running -> result. While SteamCMD downloads ("live"), the options stay open. */
+/** options -> running -> result. While SteamCMD downloads ("live"), the options stay open. Step 1
+ * shows the downloads first, then how far setting up is. */
 function showSetupView(view) {
   const running = view === "running";
   const live = running && setupState.live;
+  $("setup-step-download").textContent = view === "options" ? t("setup.step.download") : t("setup.step.running");
   $("setup-reqs").hidden = view !== "options";
   $("setup-options").hidden = !(view === "options" || live);
-  $("setup-live-note").hidden = !live;
   $("setup-branch-row").hidden = running;
   $("setup-tasks").hidden = view === "options";
   $("setup-tasks").classList.toggle("compact", live);
@@ -1259,15 +1257,12 @@ function setupOptions() {
     profiler: setupState.framework === "carbon" && $("setup-profiler").checked,
     prefab: Boolean(setupState.startMap) && $("setup-prefab").checked,
     whitelist: !$("setup-whitelist").disabled && $("setup-whitelist").checked,
-    backupMaps: $("setup-backup").checked,
   };
 }
 
 function setupTaskTitles(options) {
   const frameworkTitle = { none: t("common.modFramework"), carbon: FRAMEWORK_NAMES.carbon, oxide: FRAMEWORK_NAMES.oxide }[options.framework];
-  $("task-framework-title").textContent = options.rustedit ? t("setup.task.frameworkRustedit", { framework: frameworkTitle }) : frameworkTitle;
-  $("task-launch-title").textContent = setupState.startMap ? t("setup.task.launchMap", { map: setupState.startMap.name }) : t("setup.task.launch");
-}
+  $("task-framework-title").textContent = options.rustedit ? t("setup.task.frameworkRustedit", { framework: frameworkTitle }) : frameworkTitle;}
 
 /** Options changed while SteamCMD downloads: the job uses them when it gets there. */
 function pushLiveOptions() {
@@ -1519,7 +1514,7 @@ $("setup-whitelist").addEventListener("change", (e) => {
   wanted.whitelist = e.target.checked;
   pushLiveOptions();
 });
-for (const id of ["setup-backup", "setup-prefab"]) $(id).addEventListener("change", pushLiveOptions);
+$("setup-prefab").addEventListener("change", pushLiveOptions);
 // Links in the UI open in the browser.
 document.addEventListener("click", (e) => {
   const link = e.target.closest("a.ext-link");
@@ -1544,6 +1539,18 @@ function foldedCards() {
     return new Set();
   }
 }
+// Give items and Bug reports started open before and start folded now: a saved "folded" for them
+// would now mean open, so it's dropped once (they're folded either way).
+const FOLDED_V2_KEY = "droplaunch.foldedCards.v2";
+try {
+  if (!localStorage.getItem(FOLDED_V2_KEY)) {
+    const folded = foldedCards();
+    folded.delete("kits-card");
+    folded.delete("bugs-card");
+    localStorage.setItem(FOLDED_KEY, JSON.stringify([...folded]));
+    localStorage.setItem(FOLDED_V2_KEY, "1");
+  }
+} catch {}
 function setFolded(card, folded) {
   card.classList.toggle("folded", folded);
   const button = card.querySelector(".fold-btn");
@@ -1580,8 +1587,7 @@ function renderWelcome() {
   $("welcome-server").replaceChildren(
     ...((state.serverFound ?? state.server) ? [icon("check"), el("span", { text: t("welcome.serverHere") })] : [icon("download"), el("span", {}, rich("welcome.server", { size: spaceTag("server") }))]),
   );
-  // The folders it's going to make (or made empty, like Maps on its first start): their names
-  // show on hover.
+  // The folders it's going to make (or that are there but empty): their names show on hover.
   const making = state.folders.filter((f) => !f.exists || f.empty);
   const folders = el("span", { class: "size-tag room", title: making.map((f) => fileName(f.path)).join("\n"), text: tn("welcome.folders.count", making.length) });
   $("welcome-folders").hidden = !making.length;
@@ -1599,13 +1605,15 @@ function renderWelcome() {
   $("welcome-place").replaceChildren(icon("alert"), el("span", { text: place ? t("welcome.place", { place }) : "" }));
 }
 
-/** Set up on the welcome screen ("Show me around": the guide is on from the start). After a reset
- * with everything installed, the setup window has the options (owner, mods, whitelist…). */
+/** Set up on the welcome screen ("Show me around": the guide is on from the start). The download
+ * starts right away and the options stay open while it runs, unless DropLaunch is in a busy place
+ * (the Desktop, a drive's root…): then the setup window comes first, to pick other folders. After a
+ * reset with everything installed, the setup window has the options (owner, mods, whitelist…). */
 async function welcomeDone() {
   $("welcome").hidden = true;
   if ($("welcome-guide").checked) await ctx.guide.setOn(true);
   await ctx.setOption({ welcomed: true });
-  openSetup();
+  openSetup(null, { auto: state.setupNeeded && !state.busyPlace });
 }
 $("welcome-host").addEventListener("click", welcomeDone);
 
@@ -1633,6 +1641,10 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("welcome").hidden && $("modal").hidden) askSkipWelcome();
 });
 $("setup-close").addEventListener("click", closeSetup);
+// An option's (i) sits in its label: a click there shows what it does, it doesn't switch it.
+$("setup").addEventListener("click", (e) => {
+  if (e.target.closest(".opt-info") && !e.target.closest("a")) e.preventDefault();
+});
 $("setup-cancel").addEventListener("click", () => {
   $("setup-cancel").disabled = true;
   invoke("cancel_job").finally(() => ($("setup-cancel").disabled = false));

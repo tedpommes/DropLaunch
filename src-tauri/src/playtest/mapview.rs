@@ -17,6 +17,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
+use crate::sync::Locked;
 
 /// Sent to the UI ahead of the pixels: "DLM1", the picture's size and the world's (u32 each).
 pub const HEADER: usize = 16;
@@ -70,11 +71,11 @@ fn render_file(path: &Path, pixels: Option<usize>) -> Result<Picture, String> {
 /// The map's picture, made once per version of the file.
 pub fn picture(path: &Path) -> Result<Arc<Picture>, String> {
     let key = key_of(path)?;
-    if let Some((_, pic)) = CACHE.lock().unwrap().iter().find(|(k, _)| *k == key) {
+    if let Some((_, pic)) = CACHE.locked().iter().find(|(k, _)| *k == key) {
         return Ok(pic.clone());
     }
     let pic = Arc::new(render_file(path, None)?);
-    let mut cache = CACHE.lock().unwrap();
+    let mut cache = CACHE.locked();
     cache.retain(|(k, _)| k.0 != key.0);
     cache.insert(0, (key, pic.clone()));
     cache.truncate(2);
@@ -169,6 +170,27 @@ fn lz4net(body: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// More than a map can unpack to: a file that says so is broken.
+const MAX_UNPACKED: usize = 1 << 30;
+
+/// `len` zero bytes, or None when there isn't that much memory: `vec![0; len]` would end
+/// DropLaunch then (a failed allocation isn't a panic `catch_unwind` can catch). Zeroed by the
+/// system, so pages nobody writes to cost no memory.
+fn zeroed(len: usize) -> Option<Vec<u8>> {
+    if len == 0 {
+        return Some(Vec::new());
+    }
+    let layout = std::alloc::Layout::array::<u8>(len).ok()?;
+    // SAFETY: the size isn't zero; a null pointer (no memory) is checked.
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        return None;
+    }
+    // SAFETY: allocated just above by the global allocator with this layout (u8: capacity = size),
+    // and all `len` bytes are initialised (zero).
+    Some(unsafe { Vec::from_raw_parts(ptr, len, len) })
+}
+
 /// lz4net's LZ4Stream, unpacked only where it's read. The output has its full size from the start
 /// (pages nobody writes to cost no memory), and each block is unpacked into its place once.
 struct Unpacker<'a> {
@@ -202,11 +224,11 @@ impl<'a> Unpacker<'a> {
             blocks.push(Block { at, len, data, compressed });
             at = at.checked_add(len)?;
         }
-        // A real map unpacks to a few hundred MB.
-        if at > 4 << 30 {
+        // A real map unpacks to a few hundred MB (a 6K map to 168 MB).
+        if at > MAX_UNPACKED {
             return None;
         }
-        Some(Unpacker { done: vec![false; blocks.len()], out: vec![0; at], blocks })
+        Some(Unpacker { done: vec![false; blocks.len()], out: zeroed(at)?, blocks })
     }
 
     fn len(&self) -> usize {
@@ -591,6 +613,20 @@ fn draw(world: &World, height: &Grid, pixels: usize) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A file whose blocks add up to more than a map can be is refused before anything is
+    /// allocated for it.
+    #[test]
+    fn a_file_that_claims_too_much_is_refused() {
+        // Two compressed blocks of 1 GiB each (flags 1, length, compressed length 0).
+        let mut body = Vec::new();
+        for _ in 0..2 {
+            body.extend_from_slice(&[1, 0x80, 0x80, 0x80, 0x80, 0x04, 0]);
+        }
+        assert!(Unpacker::new(&body).is_none());
+        assert_eq!(zeroed(16), Some(vec![0u8; 16]));
+        assert_eq!(zeroed(0), Some(Vec::new()));
+    }
 
     /// A tiny world: a 4x4 heightmap, half above sea level.
     fn world_bytes() -> Vec<u8> {

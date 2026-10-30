@@ -39,8 +39,12 @@ easy"): **Set up a server** with what it takes (download SteamCMD, download the 
 SteamCMD shows as there already when it's found), and "DropLaunch will create 3 folders" with the
 count in green (hovering it names them: SteamCMD, Server_Files, Maps; only those not there yet). Run
 from a drive's root, the Desktop, Downloads, Documents or the user's own folder (Windows' own
-locations for them, OneDrive included), a yellow line suggests an empty folder first, since it
-creates folders and downloads files next to itself. Then **Show me around** (the guide, below). **Set up** opens the setup window. There's no "not now" button: a click
+locations for them, OneDrive included), a yellow line says "It's recommended to run DropLaunch
+from its own folder, not from your desktop" (or your root folder, Downloads, …), since it creates
+folders and downloads files next to itself. Then **Show me around** (the guide, below). **Set up**
+starts the downloads right away and opens the setup window, where the options can be picked while
+the files download; in one of those busy places it only opens the setup window, so other folders
+can be picked first. There's no "not now" button: a click
 next to the welcome (or Esc) asks **Skip setting up?**, saying DropLaunch needs SteamCMD and the
 server files before any map can start (**Set up** carries on, **Skip for now** leaves the Maps page's
 Setup needed bar). It shows at every start until setup is done (SteamCMD and the server files are
@@ -58,23 +62,37 @@ If SteamCMD or the server files are missing, a **setup window** explains what's 
 away, no questions, and then starts that map; the mod framework, RustEdit and owner options can
 still be changed while the files download): SteamCMD, the server files (branch of your choice), Carbon or
 Oxide plus the RustEdit extension, `start_procgen_server.bat` + `update_server.bat`, optionally
-makes you the server owner, and optionally starts the server. A click on the SteamCMD or server
+makes you the server owner, and optionally starts the server. The two scripts go into the server
+files folder before the download starts, so if SteamCMD gets stuck, `update_server.bat` can finish
+the download by hand and `start_procgen_server.bat` starts the server after. When Steam answers
+slowly (SteamCMD then says `Info request for AppId 7 returned error Timeout` and `Failed to load
+platform info`), DropLaunch tries again by itself, up to three times (Cancel also works during the
+pause in between). The same goes for a SteamCMD that says nothing for 4 minutes before it has
+signed in (15 once it downloads). The leftovers SteamCMD makes
+when it updates itself (`steamcmd.exe.old`, `steamcmd.exe.1.delete`, `crashhandler.dll.old`) are
+removed before each run. A click on the SteamCMD or server
 files folder picks another one (an existing SteamCMD or server is found there, an empty folder gets
-the download). The options come in groups: branch, mod framework and **Make me the server
-owner** (admin on every test server); then the RustEdit extension and **Add DropLaunch Plugin**
-(the bug report plugin), **Whitelist the server** (on by default: only the owner, and the players
-added in Settings, can join; it needs the owner and Carbon or Oxide, and says so when one is
-missing) and **Back up maps before removing them from Rust's cache** (on by default); then
-**Enable Carbon profiler** and **Run test map server** (the procedural map: if it works and a map
-later doesn't, it's the map). When a dropped map is waiting (a `.map` dropped on a fresh install:
-the title is then **Getting DropLaunch Ready**), that last option starts it, with **Start it in
-prefab test mode** under it for the map's first start. Options that need a mod
-framework (the RustEdit extension, the DropLaunch plugin) are
-unticked and greyed out with **None**, and come back as they were with Carbon or Oxide; **Carbon's
+the download). The window has three numbered steps, with what works without mods first and as
+little text as possible (what each switch does is behind its ⓘ, on hover or focus; a click there
+doesn't switch it):
+- **1 Downloads**: SteamCMD and the server files with their folders and sizes, and the branch;
+  while it runs, how far each part is.
+- **2 Options**: **Make me the server owner** (admin on every test server) and **Run test map
+  server** (the procedural map: if it works and a map later doesn't, it's the map). Backing up maps
+  before they're removed from Rust's cache is on by default and set in Settings → Servers.
+- **3 Mods**: None, Carbon (marked Recommended) or Oxide as three big choices. With Carbon or Oxide
+  the options they make possible show under them: the RustEdit extension, **Add DropLaunch
+  Plugin** (the bug report plugin), **Whitelist the server** (only once the owner is on: on by
+  default, only the owner and the players added in Settings can join) and, with Carbon,
+  **Enable Carbon profiler**. With None they're hidden, and come back as they were.
+
+When a dropped map is waiting (a `.map` dropped on a fresh install:
+the title is then **Getting DropLaunch Ready**), **Run test map server** starts it instead, with **Start it in
+prefab test mode** under it for the map's first start. **Carbon's
 profiler** shows with Carbon only and starts unticked: once on, Carbon tracks every call of Rust's
 code, the plugins and extensions from the server's start (a little slower, and it colours
 performance numbers), so it's only for when you want to record. The bug report plugin is only
-added when its box is ticked. Before anything is
+added when it's switched on. Before anything is
 downloaded DropLaunch checks the drive: the server files (about 6 GB) need 6.5 GB free (minus what
 a download that didn't finish left there). With less, the server row's size is red with how much
 is free, and **Fix everything** says so and offers **Choose another folder** instead of starting.
@@ -103,15 +121,17 @@ adds the tabs, the server panel, the console, the Server files page, mods, scrip
 first start's welcome screen (ticked by default), or **Show tips** in **Settings → Guide** (it turns it off again too;
 the tab also shows how far Getting started is, and **Start over**).
 - **Tips**: when a step comes up, a tip points at what it's about and says what it is, what to do
-  and why: the setup window (the two downloads, the mod framework, the owner, Fix everything, the
-  download running), the map list, starting a map, booting, Ready and Join, being on the server,
-  Stop, a start that failed, More options, a server update. One at a time, once
+  and why: the setup window (the two downloads or the download running first, then the owner, the
+  mod framework, Fix everything), the map list, starting a map, booting, Ready and Join, being on
+  the server, Stop, a start that failed, More options, a server update, Give items (with someone
+  on the server) and Bug reports (once there are some). One at a time, once
   each (**Got it**, or doing what it's about); **Turn off tips** in every tip. A tip waits while a
   window covers what it points at, and follows it when things move.
 - **Getting started** (top of the Maps page, the side column with more options): install the
-  server, start a map, join it in Rust, send a test bug report. Steps tick
-  themselves off when they happen (also with the guide off); **Show me** goes there and points at
-  it. The chevron shows every step; **Start over** shows every tip and step again; the ✕ turns the
+  server, start a map, join it in Rust, send a test bug report, give yourself items (the built-in
+  Basic Build Kit). Steps tick themselves off when they happen (also with the guide off); **Show
+  me** goes there and points at it (for Give items and Bug reports it switches to more options and
+  unfolds the card). The chevron shows every step; **Start over** shows every tip and step again; the ✕ turns the
   guide off.
 - Saved in the settings (`guide`: on, tips read, steps done).
 
@@ -127,6 +147,8 @@ the tab also shows how far Getting started is, and **Start over**).
   background the taskbar button flashes and a Windows notification does the same with one click,
   like v1 (its **Prefab test mode** button starts it in prefab test mode). Both can be switched off
   under the active maps folder in Folders. Maps DropLaunch unpacks from a `.zip` don't count as saves.
+  A maps folder that's deleted, moved away or made again while DropLaunch runs is watched again
+  (checked every 5 seconds).
 - **Start a server**: double-click a map, press its play button, or select it and press Start.
   **Start in prefab test mode** (the flask button) is the same map for unfinished maps.
   **Drop** `.map` files, `.zip` files with maps or folders on the window, or on `DropLaunch.exe`
@@ -194,6 +216,9 @@ the tab also shows how far Getting started is, and **Start over**).
   Restart), a toast, and a flashing taskbar button when DropLaunch is in the background. Cargo ship
   or event errors and antihack terrain kicks in the log get a quieter note with the same offer,
   since prefab test mode turns those off. Other steps get a note after 3 minutes.
+- **A server that stops by itself** once it was ready (not with Stop, `quit`, or by closing its
+  window) says so in the console (in red) and on the server card, with its exit code (Windows' crash
+  codes in hex, like `0xC0000005`) and the last line of its log.
 - **Bug reports (playtest)**: testers type `/bug <what's wrong>` in Rust's chat, and the report
   shows up in DropLaunch right away, pinned on a picture of the map where they stood. **Bug
   reports** on the server card opens the page (with how many are open):
@@ -425,7 +450,8 @@ in an icon saying what.
 - **Servers**: **Join automatically when a server is ready** (was on the server card); **Before a
   map starts, remove Rust's old copies of it** (was on Rust Game Maps, whose note now says which
   way it's set); **Back up maps before removing them** (those copies, and Clear Rust's map cache,
-  move to `ClientMapBackups\<date>\` in the data folder instead; **Map backups** opens it);
+  move to `ClientMapBackups\<date>\` in the data folder instead, kept for 30 days; **Map backups**
+  opens it);
   **Update Carbon or Oxide with every server update** (see Server files). **Who can join**:
   **Whitelist** and its list: the owner (always), the players added (a Steam64 ID or profile link,
   each with a remove button). Rust has no whitelist of its own: DropLaunch writes
@@ -453,7 +479,9 @@ in an icon saying what.
   maps started from outside the Maps folder count as dropped too. The settings themselves stay
   where they were (Language, Give items, …).
 - **Rent a server** (see above) and **About** (the version, look for a new DropLaunch when it
-  starts, **Licenses**, and the settings file: **Settings file** shows it in Explorer) are a group of
+  starts, **Licenses**, and the settings file: **Settings file** shows it in Explorer; next to it
+  is `droplaunch.log`, where DropLaunch writes what went wrong in the background and its own
+  crashes, 1 MB at most before it becomes `droplaunch.old.log`) are a group of
   their own at the bottom. About ends with **Reset everything…** (red, asks first): DropLaunch as it was when it was
   downloaded. Every setting back to its default (options, owner, also out of the servers' users.cfg,
   whitelist, bug reports, language, guide, map history, and the window's own choices kept in the
@@ -527,9 +555,8 @@ folder isn't writable
 Every release has `latest.json` next to `DropLaunch.exe`: version, notes, size, the exe's BLAKE3
 hash and an Ed25519 signature over version, size and hash. The public half of the release key is
 built into DropLaunch (`updater.rs`), so a release changed on GitHub without the private key is
-refused (the manifest at the check, the exe after the download). Releases are built from this
-repository by GitHub Actions (`.github/workflows/build.yml`), code signed through SignPath, and
-then given that update signature; only the maintainer holds the release key.
+refused (the manifest at the check, the exe after the download). Only the maintainer holds the
+release key.
 
 ### Third-party notices
 

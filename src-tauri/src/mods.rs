@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use crate::archive;
 use crate::steamcmd::CancelToken;
+use crate::sync::Locked;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -85,7 +86,7 @@ fn oxide_patched(server_dir: &Path) -> bool {
     let file = managed_dir(server_dir).join("Assembly-CSharp.dll");
     let Ok(meta) = std::fs::metadata(&file) else { return false };
     let key = (file.clone(), meta.len(), meta.modified().ok());
-    let mut cache = CACHE.lock().unwrap();
+    let mut cache = CACHE.locked();
     if let Some((path, len, modified, patched)) = cache.as_ref() {
         if (path, *len, *modified) == (&key.0, key.1, key.2) {
             return *patched;

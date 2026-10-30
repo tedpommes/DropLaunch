@@ -458,8 +458,14 @@ export function initServer(ctx) {
     if (!profiling || profiling.saving) return;
     profiling.saving = true;
     render();
+    // The server that records it stopped (or another one runs): there's nothing to save any more.
+    const gone = () => !isLive() || view.phase === "stopping" || view.id !== profiling.server;
     try {
       for (let i = 0; i < 60; i++) {
+        if (gone()) {
+          toast(t("profiler.notSaved", { reply: t("profiler.serverStopped") }), "warn");
+          return;
+        }
         const status = await invoke("server_ask", { text: "c.profilestatus" }).catch(() => "");
         if (/false/i.test(status)) break;
         await new Promise((r) => setTimeout(r, 1000));

@@ -94,6 +94,8 @@ fn validate_run_fires_every_stage_in_order() {
             "SteamApi",
             "Connecting (partial)",
             "Connected",
+            "Waiting (partial)",
+            "Waiting",
             "LoggedIn",
             "progress:verifying install:30.93",
             "progress:verifying install:66.3",

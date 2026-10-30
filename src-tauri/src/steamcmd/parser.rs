@@ -13,6 +13,9 @@ pub enum Signal {
     SteamApi,
     Connecting,
     Connected,
+    /// Signed in, waiting for Steam's answers: `Waiting for client config...`, `Waiting for user
+    /// info...` (each can take a minute when Steam is slow).
+    Waiting,
     LoggedIn,
     LoginFailed(String),
     /// ` Update state (0x61) downloading, progress: 3.40 (187504970 / 5520792242)`
@@ -83,6 +86,9 @@ pub fn parse(line: &str) -> Option<Signal> {
     if line.starts_with("Waiting for user info") && line.ends_with("OK") {
         return Some(Signal::LoggedIn);
     }
+    if line.starts_with("Waiting for client config") || line.starts_with("Waiting for user info") {
+        return Some(Signal::Waiting);
+    }
     if let Some(c) = SUCCESS.captures(line) {
         return Some(Signal::Success { up_to_date: &c[2] == "already up to date" });
     }
@@ -114,7 +120,7 @@ pub fn friendly_label(label: &str) -> String {
 
 /// Failures that usually go away when SteamCMD simply runs again.
 pub fn is_transient(message: &str) -> bool {
-    const HINTS: [&str; 9] = [
+    const HINTS: [&str; 10] = [
         "0x402",
         "0x602",
         "0x6 ",
@@ -124,6 +130,8 @@ pub fn is_transient(message: &str) -> bool {
         "Rate Limit",
         "Service Unavailable",
         "stopped responding",
+        // Follows `Info request for AppId 7 returned error Timeout` when Steam answers slowly.
+        "Failed to load platform info",
     ];
     HINTS.iter().any(|h| message.contains(h))
 }
@@ -191,6 +199,15 @@ mod tests {
             Some(Signal::LoginFailed("No Connection".into()))
         );
         assert_eq!(parse("Waiting for user info...OK"), Some(Signal::LoggedIn));
+        assert_eq!(parse("Waiting for client config..."), Some(Signal::Waiting));
+        assert_eq!(parse("Waiting for client config...OK"), Some(Signal::Waiting));
+        assert_eq!(parse("Waiting for user info..."), Some(Signal::Waiting));
+        // A slow Steam (seen 2026-10-26): the run quits after these, and another one usually works.
+        assert_eq!(
+            parse("ERROR! Info request for AppId 7 returned error Timeout."),
+            Some(Signal::Error("Info request for AppId 7 returned error Timeout.".into()))
+        );
+        assert!(is_transient("Failed to load platform info"));
     }
 
     #[test]

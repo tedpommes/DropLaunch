@@ -14,8 +14,8 @@ use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
-/// English, the language every other one falls back to.
-pub const BUILTIN: &str = include_str!("../../ui/lang/en.json");
+/// ui/lang/en.json, compressed by build.rs.
+const BUILTIN_PACKED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/en.json.br"));
 pub const ENGLISH: &str = "en";
 /// Languages added by dropping a file on DropLaunch (in the app data folder).
 pub const FOLDER: &str = "Languages";
@@ -88,9 +88,19 @@ struct Active {
     strings: HashMap<String, String>,
 }
 
+/// English, the language every other one falls back to: ui/lang/en.json as it is.
+pub fn builtin_text() -> &'static str {
+    static TEXT: OnceLock<String> = OnceLock::new();
+    TEXT.get_or_init(|| {
+        let mut text = Vec::new();
+        brotli::BrotliDecompress(&mut &BUILTIN_PACKED[..], &mut text).expect("en.json unpacks");
+        String::from_utf8(text).expect("en.json is UTF-8")
+    })
+}
+
 fn builtin() -> &'static HashMap<String, String> {
     static STRINGS: OnceLock<HashMap<String, String>> = OnceLock::new();
-    STRINGS.get_or_init(|| serde_json::from_str::<LangFile>(BUILTIN).expect("ui/lang/en.json is a language file").strings)
+    STRINGS.get_or_init(|| serde_json::from_str::<LangFile>(builtin_text()).expect("ui/lang/en.json is a language file").strings)
 }
 
 fn active() -> &'static RwLock<Option<Arc<Active>>> {
@@ -256,6 +266,13 @@ pub fn is_language_file(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The compressed copy in the exe unpacks to exactly the file.
+    #[test]
+    fn the_english_texts_unpack() {
+        assert_eq!(builtin_text(), include_str!("../../ui/lang/en.json"));
+        assert!(BUILTIN_PACKED.len() * 3 < builtin_text().len(), "compressed");
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("droplaunch-lang-{name}-{}", std::process::id()));

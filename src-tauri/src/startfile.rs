@@ -23,9 +23,6 @@ pub const PROCGEN_KEY: &str = "procgen_server";
 const PREFAB_SUFFIX: &str = "_prefab";
 pub const DEFAULT_PORT: u16 = 28015;
 pub const DEFAULT_RCON_PORT: u16 = 28016;
-/// Rust's query and Rust+ ports next to those two (they aren't written into start files).
-pub const DEFAULT_QUERY_PORT: u16 = 28017;
-pub const DEFAULT_APP_PORT: u16 = 28083;
 const SEED: u32 = 1184645116;
 const WORLD_SIZE: u32 = 3000;
 /// Set by DropLaunch when it starts a file, so the window closes instead of waiting for a key.
@@ -65,9 +62,6 @@ pub struct StartFile {
     pub identity: String,
     pub server_port: u16,
     pub rcon_port: u16,
-    /// `+server.queryport` and `+app.port`, when the file sets them.
-    pub query_port_arg: Option<u16>,
-    pub app_port_arg: Option<u16>,
     pub rcon_password: Option<String>,
     pub log_file: Option<PathBuf>,
     /// Has the prefab test mode arguments.
@@ -79,23 +73,6 @@ pub struct StartFile {
 impl StartFile {
     pub fn connect_command(&self) -> String {
         format!("client.connect 127.0.0.1:{}", self.server_port)
-    }
-
-    /// Where the server answers Steam's server queries. Rust's own choice when it isn't set (or
-    /// clashes): one above the game and RCON ports, so 28017 next to 28015 and 28016.
-    pub fn query_port(&self) -> u16 {
-        match self.query_port_arg {
-            Some(port) if port != 0 && port != self.server_port && port != self.rcon_port => port,
-            _ => self.server_port.max(self.rcon_port).saturating_add(1),
-        }
-    }
-
-    /// The Rust+ companion port (TCP): Rust's default is 67 above the game and RCON ports.
-    pub fn app_port(&self) -> u16 {
-        match self.app_port_arg {
-            Some(port) if port != 0 => port,
-            _ => self.server_port.max(self.rcon_port).saturating_add(67),
-        }
     }
 
     pub fn file_name(&self) -> String {
@@ -660,8 +637,6 @@ pub fn parse(text: &str, path: &Path, dir: &Path) -> StartFile {
     static IDENTITY: OnceLock<Regex> = OnceLock::new();
     static PORT: OnceLock<Regex> = OnceLock::new();
     static RCON_PORT: OnceLock<Regex> = OnceLock::new();
-    static QUERY_PORT: OnceLock<Regex> = OnceLock::new();
-    static APP_PORT: OnceLock<Regex> = OnceLock::new();
     static PASSWORD: OnceLock<Regex> = OnceLock::new();
     static LOGFILE: OnceLock<Regex> = OnceLock::new();
     static EVENTS: OnceLock<Regex> = OnceLock::new();
@@ -695,8 +670,6 @@ pub fn parse(text: &str, path: &Path, dir: &Path) -> StartFile {
         identity: arg_value(text, &IDENTITY, "server.identity").unwrap_or_else(|| "my_server_identity".into()),
         server_port: port(&PORT, "server.port", DEFAULT_PORT),
         rcon_port: port(&RCON_PORT, "rcon.port", DEFAULT_RCON_PORT),
-        query_port_arg: arg_value(text, &QUERY_PORT, "server.queryport").and_then(|v| v.parse().ok()),
-        app_port_arg: arg_value(text, &APP_PORT, "app.port").and_then(|v| v.parse().ok()),
         rcon_password: arg_value(text, &PASSWORD, "rcon.password").map(|p| unescape(&p)).filter(|p| !p.is_empty()),
         log_file,
         prefab_mode: arg_value(text, &EVENTS, "server.events").is_some_and(|v| v.eq_ignore_ascii_case("false") || v == "0"),
@@ -827,13 +800,6 @@ fn sanitize_branch(branch: &str) -> String {
     } else {
         clean
     }
-}
-
-/// Branch an existing update script was written for (None if there's none).
-pub fn update_script_branch(server_dir: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(server_dir.join(UPDATE_SCRIPT)).ok()?;
-    static BETA: OnceLock<Regex> = OnceLock::new();
-    re(&BETA, r"-beta\s+([A-Za-z0-9_.-]+)").captures(&text).map(|c| c[1].to_string())
 }
 
 pub fn random_password(len: usize) -> String {
@@ -1050,23 +1016,7 @@ mod tests {
         assert!(text.contains(r#"findstr /c:"StateFlags" "steamapps\appmanifest_258550.acf" 2>nul | findstr /c:"\"4\"" >nul && goto updated"#), "{text}");
         assert!(text.contains("-beta stagingdel validate +quit"));
         assert!(text.contains("findstr /m /c:\"Oxide.Core\""));
-        assert_eq!(update_script_branch(&server).as_deref(), Some("stagingdel"));
         let _ = std::fs::remove_dir_all(base);
-    }
-
-    #[test]
-    fn query_port_follows_rust() {
-        let dir = Path::new("S");
-        let parse_args = |args: &str| parse(&format!("RustDedicated.exe -batchmode {args}"), &dir.join("start_x.bat"), dir);
-        // Not set: one above the game and RCON ports, like Rust picks it.
-        assert_eq!(parse_args("+server.port 28015 +rcon.port 28016").query_port(), DEFAULT_QUERY_PORT);
-        assert_eq!(parse_args("+server.port 28030 +rcon.port 28016").query_port(), 28031);
-        assert_eq!(parse_args("+server.port 28015 +server.queryport 27100").query_port(), 27100);
-        // Clashing with another port: Rust ignores it.
-        assert_eq!(parse_args("+server.port 28015 +rcon.port 28016 +server.queryport 28016").query_port(), DEFAULT_QUERY_PORT);
-        // Rust+ (what a real server opened next to 28015/28016).
-        assert_eq!(parse_args("+server.port 28015 +rcon.port 28016").app_port(), DEFAULT_APP_PORT);
-        assert_eq!(parse_args("+server.port 28015 +app.port 28100").app_port(), 28100);
     }
 
     #[test]

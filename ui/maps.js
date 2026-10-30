@@ -127,9 +127,9 @@ export function initMaps(ctx) {
   let procgenStamp = 0;
   const thumbKey = (m) => (m.procgen ? `${PROCGEN}|${procgenStamp}` : `${m.path}|${m.size}|${m.modified}`);
 
-  function thumbFor(m) {
+  function requestThumb(m) {
     const key = thumbKey(m);
-    if (thumbs.has(key)) return thumbs.get(key);
+    if (thumbs.has(key)) return;
     thumbs.set(key, null);
     // One at a time, in the background.
     thumbQueue = thumbQueue.then(async () => {
@@ -143,16 +143,33 @@ export function initMaps(ctx) {
         // No picture (yet): the plain icon stays.
       }
     });
-    return null;
   }
+
+  // Pictures are only made for the maps that come into view (each one reads its whole .map file):
+  // a big Maps folder, or a folded section, doesn't keep the disk busy for minutes.
+  const thumbObserver = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        thumbObserver.unobserve(e.target);
+        if (e.target.isConnected && e.target._map) requestThumb(e.target._map);
+      }
+    },
+    { rootMargin: "200px" },
+  );
 
   /** The map's picture as its icon (a click shows it big), or the plain icon until there is one. */
   function mapIcon(m, big = false) {
-    const url = thumbFor(m);
+    const key = thumbKey(m);
+    const url = thumbs.get(key);
     const cls = `map-icon${big ? " big" : ""}${m.procgen ? " procgen" : ""}`;
     if (!url) {
       const node = el("span", { class: cls }, icon(m.procgen ? "terrain" : "map"));
       node.dataset.thumb = m.path;
+      if (!thumbs.has(key)) {
+        node._map = m;
+        thumbObserver.observe(node);
+      }
       return node;
     }
     return el(
@@ -327,6 +344,8 @@ export function initMaps(ctx) {
   function render() {
     const box = $("map-list");
     const scroll = box.scrollTop;
+    // The rows are made again: the old ones' icons needn't be watched.
+    thumbObserver.disconnect();
     const maps = sorted(list.maps).filter(matches);
     const history = list.history.filter(matches);
     const procgen = procgenEntry();

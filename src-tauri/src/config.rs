@@ -233,6 +233,7 @@ impl LoadError {
     }
 }
 
+#[derive(Clone)]
 pub struct ConfigStore {
     /// The folder DropLaunch runs from: relative paths start here.
     pub base: PathBuf,

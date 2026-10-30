@@ -1087,13 +1087,245 @@ code {
   display: none;
 }
 
+/* The setup window: 1 downloads (then how far it is), 2 mods, 3 extras in groups. */
 .setup-options {
   display: grid;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.setup-step {
+  display: flex;
+  gap: 12px;
+}
+
+.step-num {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  margin-top: 1px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.step-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.step-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 26px;
+  margin-bottom: 8px;
+}
+
+.step-head h3 {
+  margin: 0;
+  font-size: 14.5px;
+  color: var(--text-strong);
+}
+
+.step-note {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.step-head .opt-row {
+  align-self: center;
+}
+
+.setup-step .reqs {
+  margin: 0;
+}
+
+/* Mods: three big choices. */
+.framework-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.framework-cards button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 9px 12px;
+  border-radius: 11px;
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  justify-content: center;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.framework-cards button:hover {
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.framework-cards b {
+  color: var(--text-strong);
+  font-size: 13.5px;
+}
+
+.framework-cards small {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.framework-cards button[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.framework-cards button[aria-checked="true"] small {
+  color: #c5cdf5;
+}
+
+/* Options: a box of switches. */
+.setup-group {
+  padding: 3px 14px;
   border-radius: 12px;
+  background: var(--inset);
   border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.015);
+}
+
+/* The mod options, under the mod choice. */
+#setup-mod-options {
+  margin-top: 8px;
+}
+
+.setup-group .check {
+  position: relative;
+  align-items: center;
+  padding: 5px 0;
+}
+
+.setup-group .check + .check,
+.setup-group .owner-field + .check {
+  border-top: 1px solid var(--line);
+}
+
+.setup-group .check.check-sub {
+  margin-left: 0;
+  padding-left: 20px;
+}
+
+.setup-group .check.check-sub::before {
+  content: "↳";
+  position: absolute;
+  left: 2px;
+  top: 5px;
+  color: var(--faint);
+}
+
+.setup-group .check-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-strong);
+}
+
+/* The box as a switch, on the right. */
+.setup-group .check .box {
+  order: 2;
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  position: relative;
+  display: block;
+}
+
+.setup-group .check .box svg {
+  display: none;
+}
+
+.setup-group .check .box::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #9aa0aa;
+  transition: left 0.15s, background 0.15s;
+}
+
+.setup-group .check input:checked + .box::after {
+  left: 17px;
+  background: #fff;
+}
+
+.setup-group .owner-field {
+  margin: 0 0 8px;
+}
+
+/* What an option does: behind its (i), on hover or focus (a click doesn't switch it). */
+.opt-info {
+  display: inline-grid;
+  place-items: center;
+  vertical-align: -2px;
+  margin-left: 6px;
+  color: var(--faint);
+  cursor: help;
+  outline: none;
+}
+
+.opt-info svg {
+  width: 14px;
+  height: 14px;
+}
+
+.opt-info:hover,
+.opt-info:focus-visible {
+  color: var(--accent);
+}
+
+.opt-tip {
+  display: none;
+  position: absolute;
+  z-index: 5;
+  left: 0;
+  right: 0;
+  top: calc(100% - 2px);
+  padding: 8px 11px;
+  border-radius: 9px;
+  background: #34374a;
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  color: var(--text-strong);
+  font-size: 12.5px;
+  line-height: 1.45;
+  cursor: auto;
+}
+
+/* Room to move the pointer from the (i) to the text without it closing. */
+.opt-tip::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -12px;
+  height: 12px;
+}
+
+.opt-info:hover .opt-tip,
+.opt-info:focus-within .opt-tip {
+  display: block;
 }
 
 .opt-row {
@@ -1319,6 +1551,8 @@ code {
 
 .tasks li {
   display: flex;
+  /* The circle stays in the middle of the row, also when the progress bar makes it taller. */
+  align-items: center;
   gap: 12px;
   padding: 9px 12px;
   border-radius: 10px;
@@ -1343,7 +1577,6 @@ code {
   width: 22px;
   height: 22px;
   flex: none;
-  margin-top: 1px;
   border-radius: 50%;
   border: 2px solid var(--line-strong);
 }
@@ -2548,21 +2781,18 @@ kbd {
   outline-offset: -2px;
 }
 
-.join-row,
-.srv-actions {
+.join-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
-.join-row .btn,
-.srv-actions .btn {
+.join-row .btn {
   min-width: 0;
   padding: 0 10px;
 }
 
-.join-row .btn span,
-.srv-actions .btn span {
+.join-row .btn span {
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -3238,13 +3468,7 @@ body.simple .strip-row {
   align-items: center;
 }
 
-/* ---------- setup: live options, links, the countdown ---------- */
-.setup-live-note {
-  margin: 0;
-  font-size: 12px;
-  color: #a9bbef;
-}
-
+/* ---------- setup: links, the countdown ---------- */
 a.ext-link {
   color: var(--accent);
   text-decoration: none;
@@ -3344,8 +3568,9 @@ body.resizing * {
   display: none;
   position: relative;
   flex: 1 1 0;
-  /* Room for the command line: the lines above it come as the card grows. */
-  min-height: 46px;
+  /* The command line (38) and at least two lines of output (60, so the full screen button fits);
+     more lines come as the card grows. A card too short for that takes the room from the maps. */
+  min-height: 106px;
 }
 
 .server-panel.compact.sized .cp-log {
@@ -5775,13 +6000,6 @@ body.simple .guide-card {
   .guide-step.just-done .guide-mark {
     animation: none;
   }
-}
-
-/* The setup window: groups of options. */
-.opt-sep {
-  margin: 2px 0;
-  border: 0;
-  border-top: 1px solid var(--line);
 }
 
 /* ---------- Rent a server (a tab in Settings): hosting companies, BisectHosting first ---------- */

@@ -44,6 +44,18 @@ fn main() {
             }
         }
     }
+    // `cargo metadata` takes the features of every platform together (ureq's rustls is for Linux
+    // only, Windows uses its own TLS): what's really built for Windows is what `cargo tree` lists.
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let tree = Command::new(cargo)
+        .args(["tree", "--locked", "--target", TARGET, "-e", "normal", "--prefix", "none", "--format", "{p}"])
+        .current_dir(root)
+        .output()
+        .expect("run cargo tree");
+    assert!(tree.status.success(), "cargo tree failed: {}", String::from_utf8_lossy(&tree.stderr));
+    let built: HashSet<String> =
+        String::from_utf8_lossy(&tree.stdout).lines().map(|l| l.split_whitespace().take(2).collect::<Vec<_>>().join(" ")).collect();
+    shipped.retain(|id| built.contains(&format!("{} v{}", packages[id]["name"].as_str().unwrap(), packages[id]["version"].as_str().unwrap())));
 
     // Each package's own files, plus `notices-extra/<name>/` for what a published package leaves
     // out (taken from the project's repository). With neither, a package from the same

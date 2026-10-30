@@ -20,6 +20,7 @@ use crate::platform;
 use crate::playtest::{self, mapview, MapNotes, Playtest, PlaytestView};
 use crate::server::{ConsoleLine, ServerManager, ServerView, StartContext, StartReply};
 use crate::startfile::{self, Layout, Target};
+use crate::sync::Locked;
 use crate::steamcmd::manifest::{self, InstalledServer};
 use crate::steamcmd::{appinfo, install, CancelToken};
 use crate::toast::{self, Toast};
@@ -52,6 +53,8 @@ pub struct AppState {
 impl AppState {
     pub fn load(files: Vec<String>) -> Self {
         let mut config = ConfigStore::load();
+        crate::log::init(&config.data);
+        crate::log::write(&format!("DropLaunch {} started", env!("CARGO_PKG_VERSION")));
         // Language files the exe was opened with (dropped on it): added, the last one is used.
         let (languages, files): (Vec<String>, Vec<String>) = files.into_iter().partition(|f| lang::is_language_file(Path::new(f)));
         for file in &languages {
@@ -81,13 +84,13 @@ impl AppState {
     }
 
     pub fn maps_dir(&self) -> PathBuf {
-        self.store.lock().unwrap().maps_dir()
+        self.store.locked().maps_dir()
     }
 
     /// Claim the single SteamCMD slot (two SteamCMDs in one folder corrupt each other). `dir`:
     /// the server folder the job changes (None: none, like reading the branch list).
     fn start_job(&self, dir: Option<PathBuf>) -> CmdResult<(CancelToken, JobSlot<'_>)> {
-        let mut job = self.job.lock().unwrap();
+        let mut job = self.job.locked();
         if job.is_some() {
             return Err(t!("error.busy"));
         }
@@ -97,11 +100,11 @@ impl AppState {
     }
 
     fn data_dir(&self) -> PathBuf {
-        self.store.lock().unwrap().data.clone()
+        self.store.locked().data.clone()
     }
 
     fn ensure_idle(&self) -> CmdResult<()> {
-        if self.job.lock().unwrap().is_some() {
+        if self.job.locked().is_some() {
             Err(t!("error.busy"))
         } else {
             Ok(())
@@ -111,19 +114,19 @@ impl AppState {
     /// SteamCMD isn't changing the server files in `dir` (another branch's folder can be busy:
     /// a server can start from this one meanwhile).
     fn ensure_free(&self, dir: &Path) -> CmdResult<()> {
-        match self.job.lock().unwrap().as_ref() {
+        match self.job.locked().as_ref() {
             Some(Job { dir: Some(busy), .. }) if startfile::same_path(busy, dir) => Err(t!("error.busyHere")),
             _ => Ok(()),
         }
     }
 
     fn start_context(&self) -> StartContext {
-        StartContext::from_store(&self.store.lock().unwrap())
+        StartContext::from_store(&self.store.locked())
     }
 
     /// Existing installs get update_server.bat too (it's written by setup and updates).
     pub fn ensure_scripts(&self) {
-        let store = self.store.lock().unwrap();
+        let store = self.store.locked();
         let steamcmd_dir = store.steamcmd_dir();
         if !install::is_installed(&steamcmd_dir) {
             return;
@@ -149,7 +152,7 @@ struct JobSlot<'a>(&'a Mutex<Option<Job>>);
 
 impl Drop for JobSlot<'_> {
     fn drop(&mut self) {
-        *self.0.lock().unwrap() = None;
+        *self.0.locked() = None;
     }
 }
 
@@ -160,8 +163,7 @@ pub struct Folder {
     label: String,
     path: String,
     exists: bool,
-    /// There's nothing in it (yet): the Maps folder DropLaunch made on its first start counts as
-    /// one it makes, on the welcome screen.
+    /// There's nothing in it (yet): an empty folder counts as one it makes, on the welcome screen.
     empty: bool,
 }
 
@@ -264,10 +266,17 @@ pub struct Snapshot {
     guide: Guide,
 }
 
-fn snapshot(state: &AppState) -> Snapshot {
-    let busy = state.job.lock().unwrap().is_some();
+/// What the UI shows. Read from a copy of the settings: the disk is looked at without holding their
+/// lock (a slow or disconnected drive would hold up the server monitor and the bug reports too),
+/// and off the threads that answer the UI.
+async fn snapshot(state: &AppState) -> CmdResult<Snapshot> {
+    let busy = state.job.locked().is_some();
     let live_dir = state.server.live_dir();
-    let store = state.store.lock().unwrap();
+    let store = state.store.locked().clone();
+    tauri::async_runtime::spawn_blocking(move || read_snapshot(&store, busy, live_dir)).await.map_err(|e| e.to_string())
+}
+
+fn read_snapshot(store: &ConfigStore, busy: bool, live_dir: Option<PathBuf>) -> Snapshot {
     let folder = |key, label, path: &Path| Folder {
         key,
         label,
@@ -374,7 +383,7 @@ fn save(store: &ConfigStore) -> CmdResult<()> {
 
 #[tauri::command]
 pub async fn get_state(state: State<'_, AppState>) -> CmdResult<Snapshot> {
-    Ok(snapshot(&state))
+    snapshot(&state).await
 }
 
 #[tauri::command]
@@ -382,7 +391,7 @@ pub async fn get_state(state: State<'_, AppState>) -> CmdResult<Snapshot> {
 pub async fn set_folder(state: State<'_, AppState>, key: String, path: String, branch: Option<String>) -> CmdResult<Snapshot> {
     state.ensure_idle()?;
     {
-        let mut store = state.store.lock().unwrap();
+        let mut store = state.store.locked();
         let stored = store.to_stored(Path::new(&path));
         match key.as_str() {
             "steamcmd" => store.config.steamcmd_dir = stored,
@@ -395,7 +404,7 @@ pub async fn set_folder(state: State<'_, AppState>, key: String, path: String, b
     if key == "maps" {
         state.watcher.watch(state.maps_dir());
     }
-    Ok(snapshot(&state))
+    snapshot(&state).await
 }
 
 #[tauri::command]
@@ -439,7 +448,7 @@ pub struct BranchFolder {
 
 #[tauri::command]
 pub async fn branch_folder(state: State<'_, AppState>, branch: String) -> CmdResult<BranchFolder> {
-    let dir = state.store.lock().unwrap().server_dir_for(&branch);
+    let dir = state.store.locked().server_dir_for(&branch);
     Ok(BranchFolder {
         path: dir.display().to_string(),
         exists: dir.is_dir(),
@@ -454,11 +463,11 @@ pub async fn branch_folder(state: State<'_, AppState>, branch: String) -> CmdRes
 #[tauri::command]
 pub async fn set_branch(state: State<'_, AppState>, branch: String) -> CmdResult<Snapshot> {
     {
-        let mut store = state.store.lock().unwrap();
+        let mut store = state.store.locked();
         store.config.branch = branch;
         save(&store)?;
     }
-    Ok(snapshot(&state))
+    snapshot(&state).await
 }
 
 #[derive(Deserialize)]
@@ -499,7 +508,7 @@ pub struct GuidePatch {
 pub async fn set_options(state: State<'_, AppState>, options: OptionsPatch) -> CmdResult<Snapshot> {
     let whitelist_changed = options.whitelist.is_some() || options.whitelist_ids.is_some();
     {
-        let mut store = state.store.lock().unwrap();
+        let mut store = state.store.locked();
         if let Some(v) = options.auto_join {
             store.config.auto_join = v;
         }
@@ -564,19 +573,19 @@ pub async fn set_options(state: State<'_, AppState>, options: OptionsPatch) -> C
     if whitelist_changed {
         sync_whitelist(&state);
     }
-    Ok(snapshot(&state))
+    snapshot(&state).await
 }
 
 /// The whitelist file in every server folder (a running server's plugin reads it at the next
 /// login), and the plugin that checks it in or out of the running server's folder.
 fn sync_whitelist(state: &AppState) {
     let (dirs, ids) = {
-        let store = state.store.lock().unwrap();
+        let store = state.store.locked();
         (store.installs().into_iter().map(|(dir, _)| dir).collect::<Vec<_>>(), store.config.whitelist_ids())
     };
     for dir in dirs {
         if let Err(e) = whitelist::write(&dir, ids.as_deref()) {
-            eprintln!("whitelist: {e}");
+            crate::log::write(&format!("whitelist: {e}"));
         }
     }
     state.playtest.sync_plugin();
@@ -589,7 +598,7 @@ fn sync_whitelist(state: &AppState) {
 pub async fn reset_settings(state: State<'_, AppState>) -> CmdResult<Snapshot> {
     // The server folders in use until now: they're let go of as they were set up.
     let (old_dirs, had_owner) = {
-        let store = state.store.lock().unwrap();
+        let store = state.store.locked();
         (store.installs().into_iter().map(|(dir, _)| dir).collect::<Vec<_>>(), store.config.owner.is_some())
     };
     for dir in &old_dirs {
@@ -605,7 +614,7 @@ pub async fn reset_settings(state: State<'_, AppState>) -> CmdResult<Snapshot> {
         let _ = whitelist::write(dir, None);
     }
     {
-        let mut store = state.store.lock().unwrap();
+        let mut store = state.store.locked();
         let old = std::mem::take(&mut store.config);
         // Like a fresh DropLaunch: the default folders next to it, none of them linked until setup
         // runs again (it finds what's there). Only the branch list Steam gave is kept.
@@ -619,7 +628,7 @@ pub async fn reset_settings(state: State<'_, AppState>) -> CmdResult<Snapshot> {
     // bug reports put aside: numbering starts at #1 again.
     state.playtest.sync_plugin();
     let _ = state.playtest.clear_all();
-    Ok(snapshot(&state))
+    snapshot(&state).await
 }
 
 /// Instant branch list from the steamcmd.net mirror (no SteamCMD, no job slot needed).
@@ -630,19 +639,19 @@ pub async fn quick_branches(state: State<'_, AppState>) -> CmdResult<Snapshot> {
         .map_err(|e| e.to_string())?
         .map_err(|e| format!("{e:#}"))?;
     {
-        let mut store = state.store.lock().unwrap();
+        let mut store = state.store.locked();
         let previous = store.config.branch_cache.take();
         store.config.branch_cache = Some(BranchCache::merged(previous, branches, "steamcmd.net"));
         save(&store)?;
     }
-    Ok(snapshot(&state))
+    snapshot(&state).await
 }
 
 /// Authoritative branch list straight from Steam through SteamCMD.
 #[tauri::command]
 pub async fn fetch_branches(state: State<'_, AppState>, on_event: Channel<JobEvent>) -> CmdResult<Snapshot> {
     let (token, slot) = state.start_job(None)?;
-    let steamcmd_dir = state.store.lock().unwrap().steamcmd_dir();
+    let steamcmd_dir = state.store.locked().steamcmd_dir();
     let branches = tauri::async_runtime::spawn_blocking(move || {
         jobs::fetch_branches(&steamcmd_dir, &token, &mut |e| {
             let _ = on_event.send(e);
@@ -651,17 +660,17 @@ pub async fn fetch_branches(state: State<'_, AppState>, on_event: Channel<JobEve
     .await
     .map_err(|e| e.to_string())??;
     {
-        let mut store = state.store.lock().unwrap();
+        let mut store = state.store.locked();
         store.config.branch_cache = Some(BranchCache::merged(None, branches, "Steam"));
         save(&store)?;
     }
     drop(slot);
-    Ok(snapshot(&state))
+    snapshot(&state).await
 }
 
 #[tauri::command]
 pub async fn server_update(state: State<'_, AppState>, validate: bool, on_event: Channel<JobEvent>) -> CmdResult<JobSummary> {
-    let server_dir = state.store.lock().unwrap().server_dir();
+    let server_dir = state.store.locked().server_dir();
     // A server from another branch's folder can keep running.
     if state.server.runs_from(&server_dir) {
         return Err(t!("error.serverRunning"));
@@ -671,7 +680,7 @@ pub async fn server_update(state: State<'_, AppState>, validate: bool, on_event:
     }
     let (token, _slot) = state.start_job(Some(server_dir.clone()))?;
     let req = {
-        let mut store = state.store.lock().unwrap();
+        let mut store = state.store.locked();
         let branch = store.config.branch.clone();
         store.remember_branch_dir(&branch, &server_dir);
         save(&store)?;
@@ -696,7 +705,7 @@ pub async fn server_update(state: State<'_, AppState>, validate: bool, on_event:
 /// Put Oxide back after an update replaced its files.
 #[tauri::command]
 pub async fn reapply_oxide(state: State<'_, AppState>, on_event: Channel<JobEvent>) -> CmdResult<JobSummary> {
-    let server_dir = state.store.lock().unwrap().server_dir();
+    let server_dir = state.store.locked().server_dir();
     if state.server.runs_from(&server_dir) {
         return Err(t!("error.serverRunning"));
     }
@@ -713,7 +722,7 @@ pub async fn reapply_oxide(state: State<'_, AppState>, on_event: Channel<JobEven
 /// The one-click fix from the setup window.
 #[tauri::command]
 pub async fn setup_all(state: State<'_, AppState>, options: SetupOptions, on_event: Channel<JobEvent>) -> CmdResult<JobSummary> {
-    let server_dir = state.store.lock().unwrap().server_dir_for(&options.branch);
+    let server_dir = state.store.locked().server_dir_for(&options.branch);
     // A server from another branch's folder can keep running (and be used meanwhile).
     if state.server.runs_from(&server_dir) {
         return Err(t!("error.serverRunning"));
@@ -731,7 +740,7 @@ pub async fn setup_all(state: State<'_, AppState>, options: SetupOptions, on_eve
         }
         // Built now: the owner may have been set while SteamCMD downloaded. From the folder that
         // was set up (servers keep starting from the branch in use until setup is done).
-        let ctx = StartContext::with_dir(&store_handle.lock().unwrap(), launch_dir.clone());
+        let ctx = StartContext::with_dir(&store_handle.locked(), launch_dir.clone());
         match server.start(target, prefab, ctx, false)? {
             StartReply::Started { .. } => Ok(t!("job.launch.running")),
             StartReply::Busy { title } => Err(t!("job.launch.busy", title)),
@@ -745,10 +754,9 @@ pub async fn setup_all(state: State<'_, AppState>, options: SetupOptions, on_eve
     let extras: Box<dyn Fn(&SetupOptions) -> Vec<String> + Send> = Box::new(move |opts: &SetupOptions| {
         let mut lines = Vec::new();
         let (plugin, whitelist) = {
-            let mut store = extras_store.lock().unwrap();
+            let mut store = extras_store.locked();
             store.config.playtest = opts.playtest;
             store.config.whitelist = opts.whitelist;
-            store.config.backup_client_maps = opts.backup_maps;
             let _ = store.save();
             (store.config.wants_plugin(), store.config.whitelist_ids())
         };
@@ -775,7 +783,7 @@ pub async fn setup_all(state: State<'_, AppState>, options: SetupOptions, on_eve
         lines
     });
     let req = {
-        let mut store = state.store.lock().unwrap();
+        let mut store = state.store.locked();
         store.remember_branch_dir(&options.branch, &server_dir);
         save(&store)?;
         SetupRequest {
@@ -784,12 +792,12 @@ pub async fn setup_all(state: State<'_, AppState>, options: SetupOptions, on_eve
             server_dir: server_dir.clone(),
             maps_dir: store.maps_dir(),
             options: live_options.clone(),
-            owner: Box::new(move || owner_store.lock().unwrap().config.owner.clone()),
+            owner: Box::new(move || owner_store.locked().config.owner.clone()),
             extras,
             launcher,
         }
     };
-    *state.setup_options.lock().unwrap() = Some(live_options);
+    *state.setup_options.locked() = Some(live_options);
     let result = tauri::async_runtime::spawn_blocking(move || {
         jobs::setup_all(&req, &token, &mut |e| {
             let _ = on_event.send(e);
@@ -797,10 +805,10 @@ pub async fn setup_all(state: State<'_, AppState>, options: SetupOptions, on_eve
     })
     .await
     .map_err(|e| e.to_string());
-    *state.setup_options.lock().unwrap() = None;
+    *state.setup_options.locked() = None;
     // The branch that was set up is the one in use from now on.
     if result.as_ref().is_ok_and(|summary| summary.ok) {
-        let mut store = state.store.lock().unwrap();
+        let mut store = state.store.locked();
         store.config.branch = options.branch.clone();
         // Set up: the folders are DropLaunch's again (after Reset everything).
         store.config.linked = true;
@@ -864,29 +872,32 @@ fn dir_size(dir: &Path) -> u64 {
 #[tauri::command]
 pub async fn server_space(state: State<'_, AppState>, branch: Option<String>) -> CmdResult<Option<SpaceShort>> {
     let server_dir = {
-        let store = state.store.lock().unwrap();
+        let store = state.store.locked();
         branch.map_or_else(|| store.server_dir(), |b| store.server_dir_for(&b))
     };
     tauri::async_runtime::spawn_blocking(move || space_short(&server_dir)).await.map_err(|e| e.to_string())
 }
 
-/// Change the mod framework, RustEdit or starting the server while setup downloads.
+/// Change the options while setup downloads (the mod framework and what comes with it, the
+/// whitelist, starting the server and how). The branch and the map to start stay as they began.
 #[tauri::command]
 pub async fn update_setup_options(state: State<'_, AppState>, options: SetupOptions) -> CmdResult<()> {
-    if let Some(live) = state.setup_options.lock().unwrap().as_ref() {
-        let mut live = live.lock().unwrap();
+    if let Some(live) = state.setup_options.locked().as_ref() {
+        let mut live = live.locked();
         live.framework = options.framework;
         live.rustedit = options.rustedit;
         live.start_server = options.start_server;
         live.playtest = options.playtest;
         live.profiler = options.profiler;
+        live.prefab = options.prefab;
+        live.whitelist = options.whitelist;
     }
     Ok(())
 }
 
 #[tauri::command]
 pub async fn cancel_job(state: State<'_, AppState>) -> CmdResult<()> {
-    if let Some(job) = state.job.lock().unwrap().as_ref() {
+    if let Some(job) = state.job.locked().as_ref() {
         job.token.cancel();
     }
     Ok(())
@@ -906,16 +917,20 @@ pub struct MapList {
 
 #[tauri::command]
 pub async fn list_maps(state: State<'_, AppState>) -> CmdResult<MapList> {
-    let (maps_dir, server_dir, history, linked) = {
-        let store = state.store.lock().unwrap();
-        (store.maps_dir(), store.server_dir(), store.config.history.clone(), store.config.linked)
+    let (maps_dir, server_dir, steamcmd_dir, history, linked) = {
+        let store = state.store.locked();
+        (store.maps_dir(), store.server_dir(), store.steamcmd_dir(), store.config.history.clone(), store.config.linked)
     };
     // Not linked (after Reset everything): no maps folder until setup has run.
     if !linked {
         return Ok(MapList { maps_dir_exists: false, maps_dir: maps_dir.display().to_string(), maps: Vec::new(), history: Vec::new() });
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let _ = std::fs::create_dir_all(&maps_dir);
+        // The setup makes it; once set up, a removed maps folder comes back. Before that (a first
+        // start) nothing is made yet.
+        if install::is_installed(&steamcmd_dir) && manifest::read_installed(&server_dir).is_some() {
+            let _ = std::fs::create_dir_all(&maps_dir);
+        }
         let start_files = maps::StartFiles::read(&server_dir);
         let maps = maps::scan(&maps_dir, &start_files);
         let history = history
@@ -935,10 +950,10 @@ pub async fn list_maps(state: State<'_, AppState>) -> CmdResult<MapList> {
 /// Dropped files / files the exe was opened with -> maps that can be started.
 #[tauri::command]
 pub async fn import_files(state: State<'_, AppState>, paths: Vec<String>) -> CmdResult<Imported> {
-    let maps_dir = state.store.lock().unwrap().maps_dir();
+    let maps_dir = state.store.locked().maps_dir();
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     let data = state.data_dir();
-    let folder = state.store.lock().unwrap().config.folder.clone();
+    let folder = state.store.locked().config.folder.clone();
     let dropped = paths.clone();
     let dir = maps_dir.clone();
     let mut imported = tauri::async_runtime::spawn_blocking(move || maps::import(&paths, &maps_dir)).await.map_err(|e| e.to_string())?;
@@ -949,7 +964,7 @@ pub async fn import_files(state: State<'_, AppState>, paths: Vec<String>) -> Cmd
         if maps::is_map(path) && path.is_file() {
             assets::record(&data, &folder, assets::Kind::Map, path, Vec::new());
         } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("zip")) {
-            let into = dir.join(path.file_stem().map(|s| s.to_string_lossy().trim().to_string()).unwrap_or_default());
+            let into = maps::zip_folder(&dir, path);
             let made = imported.maps.iter().filter(|m| startfile::is_inside(Path::new(m), &into)).cloned().collect();
             assets::record(&data, &folder, assets::Kind::Zip, path, made);
         }
@@ -961,18 +976,18 @@ pub async fn import_files(state: State<'_, AppState>, paths: Vec<String>) -> Cmd
 
 #[tauri::command]
 pub async fn forget_map(state: State<'_, AppState>, path: String) -> CmdResult<()> {
-    let mut store = state.store.lock().unwrap();
+    let mut store = state.store.locked();
     store.config.history.retain(|h| !h.path.eq_ignore_ascii_case(&path));
     save(&store)
 }
 
 #[tauri::command]
 pub async fn take_pending_files(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
-    Ok(std::mem::take(&mut *state.pending_files.lock().unwrap()))
+    Ok(std::mem::take(&mut *state.pending_files.locked()))
 }
 
 fn remember(store: &Mutex<ConfigStore>, map: &Path) {
-    let mut store = store.lock().unwrap();
+    let mut store = store.locked();
     store.remember_map(map);
     let _ = store.save();
 }
@@ -1005,7 +1020,7 @@ pub async fn start_server(
 ) -> CmdResult<StartReply> {
     let target = Target::from(target);
     // After Reset everything nothing starts until setup has linked the folders again.
-    if !state.store.lock().unwrap().config.linked {
+    if !state.store.locked().config.linked {
         return Err(t!("error.installFirst"));
     }
     let ctx = state.start_context();
@@ -1078,7 +1093,6 @@ pub async fn create_start_file(state: State<'_, AppState>, target: TargetArg) ->
     Ok(paths)
 }
 
-/// Steam accounts that signed in on this PC (read from Steam's files), the signed-in one first.
 /// Ask the running server something over RCON without it showing in the console (e.g. whether
 /// Carbon's profiler still records); its reply.
 #[tauri::command]
@@ -1093,6 +1107,7 @@ pub async fn steam_avatar(steam_id: String) -> CmdResult<tauri::ipc::Response> {
     owner::avatar(&steam_id).map(tauri::ipc::Response::new).ok_or_else(|| t!("error.noAvatar"))
 }
 
+/// Steam accounts that signed in on this PC (read from Steam's files), the signed-in one first.
 #[tauri::command]
 pub async fn steam_accounts() -> CmdResult<Vec<LocalAccount>> {
     Ok(tauri::async_runtime::spawn_blocking(owner::local_accounts).await.unwrap_or_default())
@@ -1106,7 +1121,7 @@ pub async fn set_owner(state: State<'_, AppState>, steam_id: Option<String>, nam
         None => None,
     };
     let (server_dir, previous) = {
-        let mut store = state.store.lock().unwrap();
+        let mut store = state.store.locked();
         let previous = std::mem::replace(&mut store.config.owner, owner.clone());
         save(&store)?;
         (store.server_dir(), previous)
@@ -1128,7 +1143,7 @@ pub async fn set_owner(state: State<'_, AppState>, steam_id: Option<String>, nam
     }
     // The whitelist lets the (new) owner in.
     sync_whitelist(&state);
-    Ok(snapshot(&state))
+    snapshot(&state).await
 }
 
 /// Open a web page in the browser (https only).
@@ -1177,7 +1192,7 @@ pub async fn install_rust_game(branch: String) -> CmdResult<()> {
 /// running server's own folder: its branch's build and mods.
 #[tauri::command]
 pub async fn console_commands(state: State<'_, AppState>) -> CmdResult<Vec<concmd::Command>> {
-    let server_dir = state.server.live_dir().unwrap_or_else(|| state.store.lock().unwrap().server_dir());
+    let server_dir = state.server.live_dir().unwrap_or_else(|| state.store.locked().server_dir());
     tauri::async_runtime::spawn_blocking(move || concmd::list(&server_dir)).await.map_err(|e| e.to_string())
 }
 
@@ -1225,7 +1240,7 @@ pub struct LanguageState {
 #[tauri::command]
 pub async fn language_state(state: State<'_, AppState>) -> CmdResult<LanguageState> {
     let (base, data) = {
-        let store = state.store.lock().unwrap();
+        let store = state.store.locked();
         (store.base.clone(), store.data.clone())
     };
     let current = lang::current();
@@ -1241,7 +1256,7 @@ pub async fn language_state(state: State<'_, AppState>) -> CmdResult<LanguageSta
 /// Use another language (the UI reloads to show it).
 #[tauri::command]
 pub async fn set_language(state: State<'_, AppState>, code: String) -> CmdResult<()> {
-    let mut store = state.store.lock().unwrap();
+    let mut store = state.store.locked();
     let available = lang::list(&store.base, &store.data);
     let language = available.iter().find(|l| l.code.eq_ignore_ascii_case(&code)).ok_or_else(|| t!("lang.error.unknown", code))?;
     lang::activate(language)?;
@@ -1259,7 +1274,7 @@ pub struct AddedLanguages {
 #[tauri::command]
 pub async fn add_languages(state: State<'_, AppState>, paths: Vec<String>) -> CmdResult<AddedLanguages> {
     let data = state.data_dir();
-    let folder = state.store.lock().unwrap().config.folder.clone();
+    let folder = state.store.locked().config.folder.clone();
     let mut out = AddedLanguages { added: Vec::new(), problems: Vec::new() };
     for path in paths {
         match lang::import(Path::new(&path), &data) {
@@ -1295,7 +1310,7 @@ pub async fn export_language(app: AppHandle) -> CmdResult<Option<String>> {
     else {
         return Ok(None);
     };
-    std::fs::write(&path, lang::BUILTIN).map_err(|e| t!("error.save", file = path.display(), error = e))?;
+    std::fs::write(&path, lang::builtin_text()).map_err(|e| t!("error.save", file = path.display(), error = e))?;
     Ok(Some(path.display().to_string()))
 }
 
@@ -1317,7 +1332,7 @@ pub struct ClearReply {
 #[tauri::command]
 pub async fn clear_client_cache(state: State<'_, AppState>) -> CmdResult<ClearReply> {
     let backups = {
-        let store = state.store.lock().unwrap();
+        let store = state.store.locked();
         store.config.backup_client_maps.then(|| store.data.join(client::BACKUP_DIR))
     };
     tauri::async_runtime::spawn_blocking(move || {
@@ -1334,7 +1349,7 @@ pub async fn clear_client_cache(state: State<'_, AppState>) -> CmdResult<ClearRe
 /// background). A click comes back as a "notification-clicked" event.
 #[tauri::command]
 pub async fn notify(app: AppHandle, state: State<'_, AppState>, toast: Toast) -> CmdResult<bool> {
-    if !state.store.lock().unwrap().config.desktop_notifications {
+    if !state.store.locked().config.desktop_notifications {
         return Ok(false);
     }
     toast::show(&app, toast).map(|()| true)
@@ -1345,7 +1360,7 @@ pub async fn notify(app: AppHandle, state: State<'_, AppState>, toast: Toast) ->
 pub async fn check_update(state: State<'_, AppState>) -> CmdResult<Option<UpdateInfo>> {
     let found = tauri::async_runtime::spawn_blocking(updater::check).await.map_err(|e| e.to_string())??;
     let (manifest, info) = found.unzip();
-    *state.update.lock().unwrap() = manifest;
+    *state.update.locked() = manifest;
     Ok(info)
 }
 
@@ -1360,10 +1375,10 @@ pub struct UpdateProgress {
 /// A running server keeps running (the new DropLaunch finds it again).
 #[tauri::command]
 pub async fn install_update(app: AppHandle, state: State<'_, AppState>, on_event: Channel<UpdateProgress>) -> CmdResult<()> {
-    let Some(manifest) = state.update.lock().unwrap().clone() else {
+    let Some(manifest) = state.update.locked().clone() else {
         return Err(t!("error.checkFirst"));
     };
-    let exe = tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || {
         let mut last = std::time::Instant::now();
         let file = updater::download(&manifest, &mut |done, total| {
             if done == total || last.elapsed() >= std::time::Duration::from_millis(150) {
@@ -1372,12 +1387,10 @@ pub async fn install_update(app: AppHandle, state: State<'_, AppState>, on_event
             }
         })?;
         let exe = updater::install(&file)?;
-        updater::launch(&exe)?;
-        Ok::<_, String>(exe)
+        updater::launch(&exe)
     })
     .await
     .map_err(|e| e.to_string())??;
-    let _ = exe;
     // Close after the reply went out; the new DropLaunch waits for this one.
     let handle = app.clone();
     std::thread::spawn(move || {
@@ -1435,7 +1448,7 @@ fn map_file(state: &AppState, path: Option<String>) -> CmdResult<PathBuf> {
     match path {
         Some(path) => Ok(PathBuf::from(path)),
         None => {
-            let dir = state.store.lock().unwrap().server_dir().join("server").join(startfile::PROCGEN_IDENTITY);
+            let dir = state.store.locked().server_dir().join("server").join(startfile::PROCGEN_IDENTITY);
             mapview::newest_map(&dir).ok_or_else(|| t!("error.procgenNotYet"))
         }
     }
@@ -1445,7 +1458,7 @@ fn map_file(state: &AppState, path: Option<String>) -> CmdResult<PathBuf> {
 #[tauri::command]
 pub async fn map_thumbnail(state: State<'_, AppState>, path: Option<String>) -> CmdResult<tauri::ipc::Response> {
     let file = map_file(&state, path)?;
-    let cache = state.store.lock().unwrap().data.join("Thumbs");
+    let cache = state.store.locked().data.join("Thumbs");
     let bytes = tauri::async_runtime::spawn_blocking(move || mapview::thumbnail(&file, &cache)).await.map_err(|e| e.to_string())??;
     Ok(tauri::ipc::Response::new(bytes))
 }
@@ -1576,18 +1589,24 @@ pub async fn kit_give(state: State<'_, AppState>, kit: kits::Kit, players: Vec<S
     tauri::async_runtime::spawn_blocking(move || {
         let wait = std::time::Duration::from_secs(4);
         let spec = kits::spec(&kit);
+        // A player it didn't work for doesn't stop the others; with nobody given, the last
+        // problem is the answer (else: none of them was found).
+        let mut problem = None;
+        let none_given = |problem: Option<String>| Err(problem.unwrap_or_else(|| t!("error.kits.notFound")));
         // The plugin puts every item in its own slot; "DLKIT" says it's there.
         // (No answer or "not found": the plugin isn't loaded.)
         let first = server.rcon_call(&format!("droplaunch.givekit {} {spec}", players[0]), wait).unwrap_or_default();
         if first.trim_start().starts_with("DLKIT") {
             let mut given = usize::from(first.contains("DLKIT ok"));
             for id in &players[1..] {
-                if server.rcon_call(&format!("droplaunch.givekit {id} {spec}"), wait)?.contains("DLKIT ok") {
-                    given += 1;
+                match server.rcon_call(&format!("droplaunch.givekit {id} {spec}"), wait) {
+                    Ok(reply) if reply.contains("DLKIT ok") => given += 1,
+                    Ok(_) => {}
+                    Err(e) => problem = Some(e),
                 }
             }
             if given == 0 {
-                return Err(t!("error.kits.notFound"));
+                return none_given(problem);
             }
             return Ok(KitGiven { players: given, exact: true });
         }
@@ -1597,8 +1616,13 @@ pub async fn kit_give(state: State<'_, AppState>, kit: kits::Kit, players: Vec<S
         for id in &players {
             let mut commands = kits::vanilla_commands(&kit, id).into_iter();
             let Some(first) = commands.next() else { continue };
-            if server.rcon_call(&first, wait)?.contains("Couldn't find") {
-                continue;
+            match server.rcon_call(&first, wait) {
+                Ok(reply) if reply.contains("Couldn't find") => continue,
+                Ok(_) => {}
+                Err(e) => {
+                    problem = Some(e);
+                    continue;
+                }
             }
             given += 1;
             for command in commands {
@@ -1606,7 +1630,7 @@ pub async fn kit_give(state: State<'_, AppState>, kit: kits::Kit, players: Vec<S
             }
         }
         if given == 0 {
-            return Err(t!("error.kits.notFound"));
+            return none_given(problem);
         }
         Ok(KitGiven { players: given, exact: false })
     })
@@ -1634,7 +1658,7 @@ pub struct KitsImported {
 #[tauri::command]
 pub async fn kits_import(state: State<'_, AppState>, paths: Vec<String>) -> CmdResult<KitsImported> {
     let data = state.data_dir();
-    let folder = state.store.lock().unwrap().config.folder.clone();
+    let folder = state.store.locked().config.folder.clone();
     let mut out = KitsImported { imported: Vec::new(), rest: Vec::new() };
     for path in paths {
         let file = Path::new(&path);
@@ -1723,7 +1747,7 @@ fn modified_secs(meta: &std::fs::Metadata) -> i64 {
 #[tauri::command]
 pub async fn assets_list(state: State<'_, AppState>) -> CmdResult<Assets> {
     let (data, base, maps_dir, history, installs, folder, legacy) = {
-        let store = state.store.lock().unwrap();
+        let store = state.store.locked();
         (store.data.clone(), store.base.clone(), store.maps_dir(), store.config.history.clone(), store.installs(), store.config.folder.clone(), store.config.legacy_drops)
     };
     tauri::async_runtime::spawn_blocking(move || {
@@ -1803,7 +1827,7 @@ pub async fn assets_list(state: State<'_, AppState>) -> CmdResult<Assets> {
 #[tauri::command]
 pub async fn assets_forget(state: State<'_, AppState>, path: String) -> CmdResult<()> {
     assets::forget(&state.data_dir(), &path);
-    let mut store = state.store.lock().unwrap();
+    let mut store = state.store.locked();
     store.config.history.retain(|h| !h.path.eq_ignore_ascii_case(&path));
     save(&store)
 }

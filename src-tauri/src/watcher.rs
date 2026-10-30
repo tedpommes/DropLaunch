@@ -13,6 +13,7 @@ use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Emitter};
 
 use crate::{maps, startfile};
+use crate::sync::Locked;
 
 /// A save is announced once the file has been quiet this long (big maps are written in pieces).
 const SETTLE: Duration = Duration::from_millis(1500);
@@ -21,7 +22,8 @@ const LIST_SETTLE: Duration = Duration::from_millis(400);
 const TICK: Duration = Duration::from_millis(250);
 /// Maps DropLaunch writes itself (unpacked from a .zip) aren't announced as saves.
 const QUIET_FOR: Duration = Duration::from_secs(10);
-/// A folder that couldn't be watched (it was missing) is tried again this often.
+/// A folder that couldn't be watched (it was missing) is tried again this often, and a watched one
+/// is checked this often (deleted, moved away or made again: the watch has to start over).
 const RETRY: Duration = Duration::from_secs(5);
 
 /// The "maps-changed" event.
@@ -55,6 +57,10 @@ struct Inner {
     dir: Option<PathBuf>,
     watcher: Option<RecommendedWatcher>,
     retry_at: Option<Instant>,
+    /// When the watched folder was made: a folder made again under the same name is another one.
+    folder_created: Option<SystemTime>,
+    /// When the watched folder was last checked.
+    checked_at: Option<Instant>,
     /// Size and modified time of every map, to tell a real save from other events.
     known: HashMap<PathBuf, (u64, Option<SystemTime>)>,
     /// Maps with recent events, and when the last one came.
@@ -73,26 +79,33 @@ impl Default for MapWatcher {
 impl MapWatcher {
     /// Start delivering "maps-changed" events.
     pub fn run(&self, app: AppHandle) {
-        let Some(receiver) = self.receiver.lock().unwrap().take() else { return };
+        let Some(receiver) = self.receiver.locked().take() else { return };
         let me = self.clone();
         std::thread::Builder::new()
             .name("maps-watcher".into())
             .spawn(move || {
                 let mut last = Instant::now();
                 loop {
-                    match receiver.recv_timeout(TICK) {
-                        Ok(Ok(event)) => me.note(event),
-                        // The folder went away (or similar): look at the list again.
-                        Ok(Err(_)) => me.inner.lock().unwrap().list_changed = Some(Instant::now()),
-                        Err(RecvTimeoutError::Timeout) => {}
+                    let event = match receiver.recv_timeout(TICK) {
+                        Ok(event) => Some(event),
+                        Err(RecvTimeoutError::Timeout) => None,
                         Err(RecvTimeoutError::Disconnected) => return,
-                    }
-                    if last.elapsed() >= TICK {
-                        last = Instant::now();
-                        for change in me.settle() {
-                            let _ = app.emit("maps-changed", change);
+                    };
+                    // A round that went wrong is in the log; the next one goes on as usual.
+                    crate::sync::survive(|| {
+                        match event {
+                            Some(Ok(event)) => me.note(event),
+                            // The folder went away (or similar): is it still there?
+                            Some(Err(_)) => me.check_folder_soon(),
+                            None => {}
                         }
-                    }
+                        if last.elapsed() >= TICK {
+                            last = Instant::now();
+                            for change in me.settle() {
+                                let _ = app.emit("maps-changed", change);
+                            }
+                        }
+                    });
                 }
             })
             .expect("spawn maps watcher");
@@ -101,7 +114,7 @@ impl MapWatcher {
     /// Watch `dir` (and its subfolders) from now on.
     pub fn watch(&self, dir: PathBuf) {
         let old = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.locked();
             if inner.dir.as_deref().is_some_and(|d| startfile::same_path(d, &dir)) && inner.watcher.is_some() {
                 return;
             }
@@ -116,9 +129,16 @@ impl MapWatcher {
         drop(old);
     }
 
+    /// Something happened to the folder itself: check it at the next round.
+    fn check_folder_soon(&self) {
+        let mut inner = self.inner.locked();
+        inner.checked_at = None;
+        inner.list_changed = Some(Instant::now());
+    }
+
     /// Maps DropLaunch just wrote itself: not announced as saves.
     pub fn quiet(&self, paths: &[String]) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.locked();
         let now = Instant::now();
         for path in paths {
             inner.quiet.insert(PathBuf::from(path), now);
@@ -127,7 +147,11 @@ impl MapWatcher {
 
     fn start(&self, inner: &mut Inner) {
         let Some(dir) = inner.dir.clone() else { return };
-        let _ = std::fs::create_dir_all(&dir);
+        // Not made here: the maps folder comes with the setup. Until then it's looked for again.
+        if !dir.is_dir() {
+            inner.retry_at = Some(Instant::now() + RETRY);
+            return;
+        }
         let events = self.events.clone();
         let started = notify::recommended_watcher(move |event: FsEvent| {
             let _ = events.send(event);
@@ -137,6 +161,8 @@ impl MapWatcher {
             Ok(watcher) => {
                 inner.watcher = Some(watcher);
                 inner.retry_at = None;
+                inner.folder_created = folder_created(&dir);
+                inner.checked_at = Some(Instant::now());
             }
             Err(_) => inner.retry_at = Some(Instant::now() + RETRY),
         }
@@ -146,7 +172,7 @@ impl MapWatcher {
         if matches!(event.kind, EventKind::Access(_)) {
             return;
         }
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.locked();
         let now = Instant::now();
         for path in event.paths {
             if maps::is_map(&path) {
@@ -160,12 +186,31 @@ impl MapWatcher {
 
     /// Events that have settled down, ready for the UI.
     fn settle(&self) -> Vec<MapsChanged> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.locked();
         let now = Instant::now();
         let mut out = Vec::new();
+        // The watch follows the folder it started on: one that was deleted or moved away (into the
+        // Recycle Bin, say), or made again, needs a new watch.
+        let mut gone = None;
+        if inner.watcher.is_some() && inner.checked_at.is_none_or(|t| now.duration_since(t) >= RETRY) {
+            inner.checked_at = Some(now);
+            let created = inner.dir.as_deref().map(folder_created);
+            if created != Some(inner.folder_created) || inner.dir.as_deref().is_some_and(|d| !d.is_dir()) {
+                gone = inner.watcher.take();
+                inner.pending.clear();
+                inner.retry_at = Some(now);
+                inner.list_changed.get_or_insert(now);
+            }
+        }
         if inner.retry_at.is_some_and(|t| now >= t) {
             self.start(&mut inner);
-            inner.list_changed = Some(now);
+            // It's there (again): what's in it now isn't news, but the list may have changed.
+            if inner.watcher.is_some() {
+                if let Some(dir) = inner.dir.clone() {
+                    inner.known = snapshot(&dir);
+                }
+                inner.list_changed = Some(now);
+            }
         }
         inner.quiet.retain(|_, t| now.duration_since(*t) < QUIET_FOR);
         let ready: Vec<PathBuf> = inner.pending.iter().filter(|(_, t)| now.duration_since(**t) >= SETTLE).map(|(p, _)| p.clone()).collect();
@@ -198,8 +243,16 @@ impl MapWatcher {
             inner.list_changed = None;
             out.push(MapsChanged { saved: None });
         }
+        drop(inner);
+        // Dropped outside the lock (it waits for its thread).
+        drop(gone);
         out
     }
+}
+
+/// When a folder was made (None: unknown, or it isn't there).
+fn folder_created(dir: &Path) -> Option<SystemTime> {
+    std::fs::metadata(dir).ok().filter(std::fs::Metadata::is_dir).and_then(|m| m.created().ok())
 }
 
 fn snapshot(dir: &Path) -> HashMap<PathBuf, (u64, Option<SystemTime>)> {
@@ -245,7 +298,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("Sub")).unwrap();
         std::fs::write(dir.join("old.map"), b"old").unwrap();
         let watcher = MapWatcher::default();
-        let receiver = watcher.receiver.lock().unwrap().take().unwrap();
+        let receiver = watcher.receiver.locked().take().unwrap();
         watcher.watch(dir.clone());
 
         // A new map in a subfolder.
@@ -270,6 +323,16 @@ mod tests {
         std::fs::remove_file(dir.join("old.map")).unwrap();
         let out = wait_for(&watcher, &receiver);
         assert!(!out.is_empty() && out.iter().all(|c| c.saved.is_none()), "{out:?}");
+
+        // The folder deleted and made again: the watch starts over on the new one.
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        watcher.check_folder_soon();
+        let out = wait_for(&watcher, &receiver);
+        assert!(out.iter().all(|c| c.saved.is_none()), "{out:?}");
+        std::fs::write(dir.join("again.map"), b"after").unwrap();
+        let saved = wait_for(&watcher, &receiver).into_iter().find_map(|c| c.saved).expect("announced");
+        assert_eq!((saved.name.as_str(), saved.new), ("again", true));
         drop(watcher);
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::mods::{self, Framework};
 use crate::startfile::{self, Layout, Target};
+use crate::sync::Locked;
 use crate::steamcmd::appinfo::{self, Branch};
 use crate::steamcmd::parser::{self, Signal};
 use crate::steamcmd::runner::{self, Output};
@@ -81,6 +82,19 @@ impl UpdateRequest {
 }
 
 const MAX_ATTEMPTS: u32 = 3;
+const RETRY_PAUSE: Duration = Duration::from_secs(10);
+
+/// Wait, unless the job is cancelled meanwhile (true: it was).
+fn wait_or_cancel(time: Duration, cancel: &CancelToken) -> bool {
+    let until = Instant::now() + time;
+    while Instant::now() < until {
+        if cancel.is_cancelled() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    cancel.is_cancelled()
+}
 
 enum Outcome {
     Ok { title: String, detail: String, attention: bool, buildid: Option<String> },
@@ -170,6 +184,10 @@ impl<'a> Session<'a> {
                 self.phase(Phase::Login);
                 self.status(t!("job.signingIn"));
             }
+            Signal::Waiting => {
+                self.phase(Phase::Login);
+                self.status(t!("job.waitingSteam"));
+            }
             Signal::LoggedIn => {
                 self.phase(Phase::Files);
                 self.status(self.after_login.clone());
@@ -211,6 +229,7 @@ impl<'a> Session<'a> {
 /// Download SteamCMD if it's missing and let it update itself once.
 fn ensure_steamcmd(dir: &Path, cancel: &CancelToken, s: &mut Session) -> Result<(), Outcome> {
     if install::is_installed(dir) {
+        install::tidy(dir);
         return Ok(());
     }
     s.phase(Phase::Steamcmd);
@@ -233,6 +252,7 @@ fn ensure_steamcmd(dir: &Path, cancel: &CancelToken, s: &mut Session) -> Result<
     if run.cancelled {
         return Err(Outcome::Cancelled);
     }
+    install::tidy(dir);
     s.line(t!("job.steamcmd.ready"), LineSource::App);
     Ok(())
 }
@@ -380,7 +400,10 @@ fn run_update(req: &UpdateRequest, cancel: &CancelToken, s: &mut Session) -> Out
         if attempt > 1 {
             s.line(t!("job.retrying", attempt, max = MAX_ATTEMPTS), LineSource::App);
             s.status(t!("job.retrying", attempt, max = MAX_ATTEMPTS));
-            std::thread::sleep(Duration::from_secs(3));
+            // A slow Steam often needs a moment more than a few seconds (Cancel works meanwhile).
+            if wait_or_cancel(RETRY_PAUSE, cancel) {
+                return Outcome::Cancelled;
+            }
         }
         s.phase(Phase::Steamcmd);
         s.status(t!("files.status.starting"));
@@ -454,9 +477,6 @@ pub struct SetupOptions {
     /// Only the owner (and the players added in Settings) can join.
     #[serde(default)]
     pub whitelist: bool,
-    /// Maps removed from the Rust game's cache are kept in a backup folder.
-    #[serde(default)]
-    pub backup_maps: bool,
 }
 
 /// Starts a server through DropLaunch's server manager; returns a short note.
@@ -467,8 +487,8 @@ pub struct SetupRequest {
     pub steamcmd_dir: PathBuf,
     pub server_dir: PathBuf,
     pub maps_dir: PathBuf,
-    /// The UI can still change the mod framework, RustEdit and starting the server while
-    /// SteamCMD downloads: each step reads what's chosen when it begins.
+    /// The UI can still change the options (not the branch or the map) while SteamCMD downloads:
+    /// each step reads what's chosen when it begins.
     pub options: Arc<Mutex<SetupOptions>>,
     /// The server owner as set right now (it can change during the download too).
     pub owner: Box<dyn Fn() -> Option<crate::owner::SteamUser> + Send>,
@@ -488,9 +508,8 @@ pub fn setup_all(req: &SetupRequest, cancel: &CancelToken, emit: &mut dyn FnMut(
 }
 
 fn run_setup(req: &SetupRequest, cancel: &CancelToken, s: &mut Session) -> Outcome {
-    let options = || req.options.lock().unwrap().clone();
+    let options = || req.options.locked().clone();
     let opts = &options();
-    let _ = std::fs::create_dir_all(&req.maps_dir);
 
     s.task("steamcmd", TaskState::Active, "");
     let had_steamcmd = install::is_installed(&req.steamcmd_dir);
@@ -499,6 +518,14 @@ fn run_setup(req: &SetupRequest, cancel: &CancelToken, s: &mut Session) -> Outco
         return outcome;
     }
     s.task("steamcmd", TaskState::Done, if had_steamcmd { t!("job.task.alreadyInstalled") } else { t!("job.task.downloaded") });
+
+    // The scripts come first: if the download fails or gets stuck, update_server.bat can do it
+    // by hand (it also works without DropLaunch), and start_procgen_server.bat starts it after.
+    let layout = Layout { base: &req.base_dir, server_dir: &req.server_dir, steamcmd_dir: &req.steamcmd_dir };
+    if std::fs::create_dir_all(&req.server_dir).is_ok() {
+        let _ = startfile::ensure(&layout, &Target::Procgen, false);
+        write_update_script(&layout, &opts.branch, s);
+    }
 
     s.task("server", TaskState::Active, "");
     let before = manifest::read_installed(&req.server_dir);
@@ -564,7 +591,6 @@ fn run_setup(req: &SetupRequest, cancel: &CancelToken, s: &mut Session) -> Outco
     }
 
     s.task("startfile", TaskState::Active, "");
-    let layout = Layout { base: &req.base_dir, server_dir: &req.server_dir, steamcmd_dir: &req.steamcmd_dir };
     let scripts = startfile::ensure(&layout, &Target::Procgen, false)
         .and_then(|(start, _)| Ok((start, startfile::write_update_script(&layout, &opts.branch)?)));
     match scripts {
@@ -588,6 +614,9 @@ fn run_setup(req: &SetupRequest, cancel: &CancelToken, s: &mut Session) -> Outco
             return Outcome::Failed(message);
         }
     }
+
+    // Set up: now the maps folder is made (not on a first start, before anything is set up).
+    let _ = std::fs::create_dir_all(&req.maps_dir);
 
     let opts = &options();
     if !opts.start_server {
@@ -690,5 +719,24 @@ pub fn fetch_branches(steamcmd_dir: &Path, cancel: &CancelToken, emit: &mut dyn 
             s.phase(Phase::Failed);
             Err(s.error.clone().map(|e| parser::describe_error(&e)).unwrap_or_else(|| t!("job.branches.none")))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_retry_pause_ends_when_cancelled() {
+        let cancel = CancelToken::default();
+        let other = cancel.clone();
+        let started = Instant::now();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            other.cancel();
+        });
+        assert!(wait_or_cancel(Duration::from_secs(10), &cancel));
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(!wait_or_cancel(Duration::from_millis(50), &CancelToken::default()));
     }
 }

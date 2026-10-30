@@ -11,10 +11,7 @@ use crate::steamcmd::CancelToken;
 
 /// Download `url` to `dest` (via a .part file); `progress(done, total)` is called as bytes arrive.
 pub fn download(url: &str, dest: &Path, cancel: &CancelToken, progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<()> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(20))
-        .timeout_read(Duration::from_secs(60))
-        .build();
+    let agent = crate::http::agent(Duration::from_secs(20), Duration::from_secs(60));
     let response = agent.get(url).call().with_context(|| t!("error.download", url))?;
     let total = response.header("Content-Length").and_then(|v| v.parse::<u64>().ok());
     let mut reader = response.into_reader();
@@ -94,4 +91,28 @@ fn extract_tar_gz(archive: &Path, dir: &Path) -> Result<()> {
 #[cfg(not(unix))]
 fn extract_tar_gz(archive: &Path, _dir: &Path) -> Result<()> {
     bail!(t!("error.linuxArchive", file = archive.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    /// Carbon, Oxide and SteamCMD come as deflated zips: unpacked into place, folders too.
+    #[test]
+    fn deflated_zips_unpack() {
+        let dir = std::env::temp_dir().join(format!("droplaunch-unzip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = "Carbon ".repeat(5000);
+        let zip_path = dir.join("Carbon.Windows.Release.zip");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&zip_path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("carbon/managed/Carbon.dll", opts).unwrap();
+        zip.write_all(text.as_bytes()).unwrap();
+        zip.finish().unwrap();
+        assert!(std::fs::metadata(&zip_path).unwrap().len() < 2000, "compressed");
+        super::extract(&zip_path, &dir.join("server")).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("server").join("carbon").join("managed").join("Carbon.dll")).unwrap(), text);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -23,6 +23,9 @@ const SCREEN_COLS: u16 = 400;
 const SCREEN_ROWS: u16 = 50;
 /// SteamCMD prints progress every ~2 s; this long without any output means it is stuck.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+/// Until it has signed in, less: a slow Steam answers within a few minutes (2.5 measured, its
+/// own timeouts are 2), and a sign-in that hangs is then tried again instead of waited on.
+const LOGIN_IDLE_TIMEOUT: Duration = Duration::from_secs(4 * 60);
 /// After the main process exits, how long to wait on quiet processes it left behind.
 const LINGER_TIMEOUT: Duration = Duration::from_secs(45);
 /// "Where is the cursor?" - portable-pty opens ConPTY with INHERIT_CURSOR, so conhost sends
@@ -132,6 +135,14 @@ pub fn run_in_pty(
         }
     });
 
+    // Signed in yet? (Until then a shorter silence counts as stuck.)
+    let signed_in = std::cell::Cell::new(false);
+    let mut on = |out: Output| {
+        if matches!(out, Output::Signal { signal: Signal::LoggedIn, .. }) {
+            signed_in.set(true);
+        }
+        on(out);
+    };
     let mut stream = StreamParser::new();
     let mut result = RunResult::default();
     let mut last_output = Instant::now();
@@ -146,13 +157,13 @@ pub fn run_in_pty(
                     let _ = writer.write_all(CURSOR_REPLY);
                     let _ = writer.flush();
                 }
-                stream.push(&bytes, on);
+                stream.push(&bytes, &mut on);
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break, // Unix: EOF once every process is gone
         }
 
-        let stuck = last_output.elapsed() > IDLE_TIMEOUT;
+        let stuck = last_output.elapsed() > if signed_in.get() { IDLE_TIMEOUT } else { LOGIN_IDLE_TIMEOUT };
         if (cancel.is_cancelled() && !result.cancelled) || (stuck && !result.timed_out) {
             result.cancelled |= cancel.is_cancelled();
             result.timed_out |= stuck;
@@ -191,9 +202,9 @@ pub fn run_in_pty(
     drop(pair.master);
     let deadline = Instant::now() + Duration::from_secs(3);
     while let Ok(bytes) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-        stream.push(&bytes, on);
+        stream.push(&bytes, &mut on);
     }
-    stream.finish(on);
+    stream.finish(&mut on);
     if result.exit_code.is_none() {
         if let Ok(Some(status)) = child.try_wait() {
             result.exit_code = Some(status.exit_code());

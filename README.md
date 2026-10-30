@@ -23,9 +23,9 @@
 
 ## What it does
 
-- **Sets everything up for you.** The first time, one button downloads SteamCMD and the Rust
-  server, adds Carbon or Oxide and the RustEdit extension, and can make you admin on every test
-  server.
+- **Sets everything up for you.** The first time, one click downloads SteamCMD and the Rust
+  server. While it downloads you pick the rest: Carbon or Oxide, the RustEdit extension, and
+  whether you're admin on every test server.
 - **All your maps in one list.** Everything in your maps folder, plus the maps you started before.
   Click ▶ to start one, or drop a `.map` or `.zip` on the window.
 - **Notices when you save in RustEdit.** Save a map and DropLaunch offers to restart the server
@@ -34,10 +34,14 @@
 - **Bug reports from your testers.** They type `/bug` and a few words in Rust's chat, and the
   report shows up on a map of your island, with where they stood and which way they looked.
   Teleport there to see it yourself.
-- **Gives items** to you and your testers, from kits you make.
+- **Gives items** to you and your testers: from kits you make, or the built-in build kit (a
+  building plan, a hammer and plenty of materials).
 - **More options** when you want them: the server console, live server stats, mods, start files,
-  other server branches, and a cleanup for the maps Rust keeps in its cache.
-- **Keeps itself up to date**, and the server files too.
+  other server branches, and a cleanup for the maps Rust keeps in its cache (backed up for 30
+  days first).
+- **Shows you around** if you're new: tips explain each step as it comes up, and a Getting
+  started list ticks itself off as you go.
+- **Keeps itself up to date**, showing what's new first, and the server files too.
 
 <p align="center">
   <img src="docs/screenshots/expanded.png" width="820" alt="The expanded view: server console, live stats, give items and bug reports">
@@ -53,14 +57,16 @@
 
 1. **Download** `DropLaunch.exe` from the [latest release](https://github.com/tedpommes/DropLaunch/releases/latest).
 2. **Put it in an empty folder**, for example `C:\DropLaunch`. DropLaunch creates its folders
-   next to itself: `SteamCMD`, `Server_Files` and `Maps`.
-3. **Start it and click Set up.** The Rust server is about 6 GB, so the first setup takes 5 to 30
-   minutes depending on your connection. You can close the setup window; it keeps going.
+   next to itself: `SteamCMD`, `Server_Files` and, once it's set up, `Maps`.
+3. **Start it and click Set up a server.** The download starts right away: the Rust server is
+   about 6 GB, so it takes 5 to 30 minutes depending on your connection. Pick your options
+   meanwhile; **Hide** keeps it going in the background.
 4. **Add your maps** to the `Maps` folder, or drop them on the window, and click ▶.
 5. When it says **Ready**, click **Join in Rust**. (Or press F1 in Rust and type
    `client.connect 127.0.0.1:28015`.)
 
-Turn on **Show me around** on the welcome screen and DropLaunch explains each step as you go.
+**Show me around** on the welcome screen (on by default) explains each step as you go. Settings →
+Guide turns it off or on again.
 
 ## What you need
 
@@ -73,9 +79,9 @@ That's all: no installer, no .NET, no other downloads. DropLaunch is one small e
 ## Questions
 
 **Windows says "Windows protected your PC".**
-Windows shows this for programs that not many people have downloaded yet. Click **More info**,
-then **Run anyway**. Every release is built from the source in this repository, and you can
-check what it does here.
+Windows shows this for programs that aren't code-signed and that not many people have downloaded
+yet. Click **More info**, then **Run anyway**. Every release is built from the source in this
+repository, so you can check what it does here.
 
 **My antivirus doesn't like it.**
 Tools that download files and start servers sometimes get flagged by mistake. Please
@@ -83,8 +89,13 @@ Tools that download files and start servers sometimes get flagged by mistake. Pl
 be reported as a false positive.
 
 **How do I update?**
-DropLaunch tells you when a new version is out, and one click updates it. Every update is
-signed: a download that was changed along the way is refused.
+DropLaunch tells you when a new version is out and what changed, and one click updates it.
+Every update is signed with the author's key: DropLaunch refuses a download that doesn't match,
+so nobody else can slip in a changed version.
+
+**Something doesn't work.**
+Please [open an issue](https://github.com/tedpommes/DropLaunch/issues) and attach `droplaunch.log`
+from `%LOCALAPPDATA%\DropLaunch`: DropLaunch writes what went wrong in the background there.
 
 **How do I remove it?**
 Stop any running server, then delete the DropLaunch folder. Its settings, kits and bug reports
@@ -93,22 +104,10 @@ are in `%LOCALAPPDATA%\DropLaunch`; delete that folder too.
 **Where can I read about everything it does?**
 In the [full guide](docs/GUIDE.md). Building it yourself: [development notes](docs/DEVELOPMENT.md).
 
-## Code signing policy
-
-Free code signing provided by [SignPath.io](https://signpath.io), certificate by
-[SignPath Foundation](https://signpath.org).
-
-- Committers and reviewers: [TedPommes](https://github.com/tedpommes)
-- Approvers: [TedPommes](https://github.com/tedpommes)
-
-Only `DropLaunch.exe` is signed, and only as built by this repository's GitHub Actions workflow
-from its source. SteamCMD, the Rust server, Carbon, Oxide and the RustEdit extension aren't part
-of DropLaunch: they're downloaded from their makers when chosen and aren't signed by this project.
-
 ## Privacy
 
-DropLaunch has no accounts, no analytics and no telemetry. Its settings, maps, kits and bug
-reports stay on your PC, and the Steam account it detects is read from Steam's files on this PC and
+DropLaunch has no accounts, no analytics and no telemetry. Its settings, maps, kits, bug reports
+and log stay on your PC, and the Steam account it detects is read from Steam's files on this PC and
 never sent anywhere. Its web requests carry nothing about you apart from what any connection does
 (your IP address, and a user agent like `DropLaunch/<version>` that names the program).
 

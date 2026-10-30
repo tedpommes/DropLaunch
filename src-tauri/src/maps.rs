@@ -199,10 +199,17 @@ struct Unzipped {
 const MAX_JSON: u64 = 4 * 1024 * 1024;
 const MAX_SCRIPT: u64 = 256 * 1024;
 
+/// Where a .zip's files go: `Maps/<zip name>/`. A name Windows can't keep as a folder name (only
+/// dots, or ending in dots or spaces) is cleaned up first: "...zip" mustn't mean the folder above.
+pub fn zip_folder(maps_dir: &Path, zip_path: &Path) -> PathBuf {
+    let stem = zip_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = stem.trim().trim_end_matches(['.', ' ']);
+    maps_dir.join(if name.is_empty() { "zip" } else { name })
+}
+
 fn unzip_maps(zip_path: &Path, maps_dir: &Path) -> anyhow::Result<Unzipped> {
     let mut zip = zip::ZipArchive::new(File::open(zip_path)?)?;
-    let stem = zip_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "zip".into());
-    let dest_dir = maps_dir.join(stem.trim());
+    let dest_dir = zip_folder(maps_dir, zip_path);
     let mut out = Unzipped::default();
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i)?;
@@ -251,6 +258,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn a_zips_folder_stays_inside_the_maps_folder() {
+        let maps = Path::new(r"C:\Maps");
+        assert_eq!(zip_folder(maps, Path::new(r"D:\Downloads\Island v2.zip")), maps.join("Island v2"));
+        assert_eq!(zip_folder(maps, Path::new(r"D:\Downloads\a.b.zip")), maps.join("a.b"));
+        assert_eq!(zip_folder(maps, Path::new(r"D:\Downloads\ Island. .zip")), maps.join("Island"));
+        for odd in ["...zip", "..zip", " .zip"] {
+            assert_eq!(zip_folder(maps, &Path::new(r"D:\Downloads").join(odd)), maps.join("zip"), "{odd}");
+        }
     }
 
     #[test]

@@ -78,11 +78,7 @@ fn manifest_url() -> String {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout_read(Duration::from_secs(30))
-        .user_agent(&format!("DropLaunch/{}", current_version()))
-        .build()
+    crate::http::agent(Duration::from_secs(10), Duration::from_secs(30))
 }
 
 /// Is `a` a newer version than `b` ("2.1.0" vs "2.0.3")?

@@ -73,11 +73,7 @@ pub fn parse_branches(output: &str) -> Option<Vec<Branch>> {
 }
 
 pub fn fetch_mirror() -> anyhow::Result<Vec<Branch>> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(8))
-        .timeout_read(Duration::from_secs(15))
-        .user_agent(concat!("DropLaunch/", env!("CARGO_PKG_VERSION")))
-        .build();
+    let agent = crate::http::agent(Duration::from_secs(8), Duration::from_secs(15));
     let body = agent.get(MIRROR_URL).call().context(t!("error.mirror.noAnswer"))?.into_string()?;
     let json: Value = serde_json::from_str(&body).context(t!("error.mirror.unexpected"))?;
     branches_from_json(&json).filter(|b| !b.is_empty()).context(t!("error.mirror.noList"))

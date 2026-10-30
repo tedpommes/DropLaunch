@@ -4,7 +4,6 @@
 //! folder that were already running (started earlier, or by double-clicking a start file).
 
 pub mod boot;
-pub mod query;
 pub mod rcon;
 
 use crate::t;
@@ -25,18 +24,23 @@ use crate::playtest;
 use crate::whitelist;
 use crate::platform::{self, ProcessHandle, ProcessJob};
 use crate::startfile::{self, Layout, StartFile, Target, LAUNCH_ENV};
+use crate::sync::Locked;
 use crate::steamcmd::manifest::{self, SERVER_EXECUTABLE};
 use boot::Tracker;
 
 const KEEP_LINES: usize = 1500;
 const TICK: Duration = Duration::from_millis(250);
 const SCAN_EVERY: Duration = Duration::from_secs(3);
+/// A round of the monitor that panicked: a pause before the next one (not a log line per tick).
+const AFTER_PANIC: Duration = Duration::from_secs(2);
 /// Often enough for the performance graph.
 const INFO_EVERY: Duration = Duration::from_secs(2);
 const QUIT_TIMEOUT: Duration = Duration::from_secs(45);
 /// How long the start file may take to start RustDedicated.
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(20);
 const INFO_ID: i32 = 2_000_000_000;
+/// RCON questions that went unanswered in time, remembered so their late answers are dropped.
+const ABANDONED_KEEP: usize = 32;
 const QUIT_ID: i32 = INFO_ID - 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -210,6 +214,8 @@ struct Inner {
     game_kits: Vec<String>,
     /// RCON commands sent for DropLaunch itself (not the console), waiting for their reply.
     waiting: HashMap<i32, mpsc::Sender<String>>,
+    /// Those that stopped waiting (no answer in time): a late answer isn't for the console.
+    abandoned: VecDeque<i32>,
 }
 
 struct Live {
@@ -343,7 +349,7 @@ impl ServerManager {
 
     /// The running server's port and branch (for Join).
     pub fn join_target(&self) -> (u16, String) {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.locked();
         let live = inner.live.as_ref();
         (
             live.and_then(|l| l.start.as_ref()).map_or(startfile::DEFAULT_PORT, |s| s.server_port),
@@ -358,7 +364,10 @@ impl ServerManager {
         std::thread::Builder::new()
             .name("server-monitor".into())
             .spawn(move || loop {
-                me.tick();
+                // A round that went wrong is in the log; the next one starts a little later.
+                if !crate::sync::survive(|| me.tick()) {
+                    std::thread::sleep(AFTER_PANIC);
+                }
                 std::thread::sleep(TICK);
             })
             .expect("spawn server monitor");
@@ -368,7 +377,7 @@ impl ServerManager {
     /// server logs an exception for that). The server itself keeps running.
     pub fn shutdown(&self) {
         let client = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.locked();
             inner.shutting_down = true;
             inner.live.as_mut().and_then(|l| l.rcon.take())
         };
@@ -377,14 +386,9 @@ impl ServerManager {
         }
     }
 
-    /// A server from this folder is running (or starting/stopping).
-    pub fn is_live(&self) -> bool {
-        self.inner.lock().unwrap().live.is_some()
-    }
-
     /// The server folder of the server that runs (each branch has its own).
     pub fn live_dir(&self) -> Option<PathBuf> {
-        self.inner.lock().unwrap().live.as_ref().map(|l| l.dir.clone())
+        self.inner.locked().live.as_ref().map(|l| l.dir.clone())
     }
 
     /// A server from `dir` runs (its files are in use).
@@ -393,12 +397,16 @@ impl ServerManager {
     }
 
     pub fn status(&self) -> (Option<ServerView>, Vec<ConsoleLine>) {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.locked();
         (inner.view(), inner.lines.iter().cloned().collect())
     }
 
     pub fn start(&self, target: Target, prefab: bool, ctx: StartContext, replace: bool) -> Result<StartReply, String> {
-        let mut inner = self.inner.lock().unwrap();
+        // The game's map cache first, without the lock (a start that has to wait for the running
+        // server to stop does it when it's its turn).
+        let idle = self.inner.locked().live.is_none();
+        let cleaned = idle.then(|| clean_game_cache(&target, &ctx));
+        let mut inner = self.inner.locked();
         if let Some(live) = inner.live.as_mut() {
             let title = live.title.clone();
             if !replace {
@@ -411,7 +419,7 @@ impl ServerManager {
             inner.dirty = true;
             return Ok(StartReply::Queued { title });
         }
-        let live = self.launch(&mut inner, target, prefab, &ctx)?;
+        let live = self.launch(&mut inner, target, prefab, &ctx, cleaned)?;
         let view = live.view(false);
         inner.live = Some(live);
         inner.last = None;
@@ -420,7 +428,7 @@ impl ServerManager {
     }
 
     pub fn stop(&self, force: bool) -> Result<(), String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.locked();
         inner.pending = None;
         let Some(live) = inner.live.as_mut() else { return Err(t!("error.noServer")) };
         let graceful = request_stop(live, force);
@@ -436,7 +444,7 @@ impl ServerManager {
     /// Stop and start the same start file again, from the server's own folder (also when another
     /// branch was picked meanwhile).
     pub fn restart(&self, ctx: StartContext) -> Result<(), String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.locked();
         let Some(live) = inner.live.as_mut() else { return Err(t!("error.noServer")) };
         let Some(target) = live.target.clone() else {
             return Err(t!("error.cantRestart"));
@@ -456,7 +464,7 @@ impl ServerManager {
         if text.is_empty() {
             return Ok(());
         }
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.locked();
         let id = inner.next_cmd;
         inner.next_cmd = if id >= QUIT_ID - 1 { 1 } else { id + 1 };
         let Some(live) = inner.live.as_mut() else { return Err(t!("error.noServer")) };
@@ -473,7 +481,7 @@ impl ServerManager {
     pub fn rcon_call(&self, text: &str, timeout: Duration) -> Result<String, String> {
         let (tx, rx) = mpsc::channel();
         let id = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.locked();
             let id = inner.next_cmd;
             inner.next_cmd = if id >= QUIT_ID - 1 { 1 } else { id + 1 };
             let Some(live) = inner.live.as_ref() else { return Err(t!("error.noServer")) };
@@ -486,14 +494,20 @@ impl ServerManager {
         };
         let reply = rx.recv_timeout(timeout).map_err(|_| t!("error.noAnswer"));
         if reply.is_err() {
-            self.inner.lock().unwrap().waiting.remove(&id);
+            let mut inner = self.inner.locked();
+            if inner.waiting.remove(&id).is_some() {
+                inner.abandoned.push_back(id);
+                while inner.abandoned.len() > ABANDONED_KEEP {
+                    inner.abandoned.pop_front();
+                }
+            }
         }
         reply
     }
 
     /// The same without waiting for the reply.
     pub fn rcon_send(&self, text: &str) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.locked();
         let id = inner.next_cmd;
         inner.next_cmd = if id >= QUIT_ID - 1 { 1 } else { id + 1 };
         if let Some(Live { rcon: Some(client), rcon_connected: true, .. }) = inner.live.as_ref() {
@@ -503,18 +517,18 @@ impl ServerManager {
 
     /// Bug reports the server logged since the last call (the playtest plugin's JSON).
     pub fn take_reports(&self) -> Vec<String> {
-        std::mem::take(&mut self.inner.lock().unwrap().reports)
+        std::mem::take(&mut self.inner.locked().reports)
     }
 
     /// Kits saved in the game since the last call (only from lines logged while DropLaunch
     /// follows the server: an older log read again doesn't bring a deleted kit back).
     pub fn take_game_kits(&self) -> Vec<String> {
-        std::mem::take(&mut self.inner.lock().unwrap().game_kits)
+        std::mem::take(&mut self.inner.locked().game_kits)
     }
 
     /// The running server, for the playtest kit.
     pub fn playtest_server(&self) -> Option<PlaytestServer> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.locked();
         let live = inner.live.as_ref()?;
         let start = live.start.as_ref();
         Some(PlaytestServer {
@@ -529,7 +543,9 @@ impl ServerManager {
         })
     }
 
-    fn launch(&self, inner: &mut Inner, target: Target, prefab: bool, ctx: &StartContext) -> Result<Live, String> {
+    /// `cleaned`: the console's lines from cleaning the game's map cache for this start (None: not
+    /// done yet, it's done here).
+    fn launch(&self, inner: &mut Inner, target: Target, prefab: bool, ctx: &StartContext, cleaned: Option<Vec<(String, &'static str)>>) -> Result<Live, String> {
         if !ctx.server_dir.join(SERVER_EXECUTABLE).is_file() {
             return Err(t!("error.notInstalled"));
         }
@@ -567,17 +583,8 @@ impl ServerManager {
                 Err(_) => return Err(t!("error.logInUse", path = log.display())),
             }
         }
-        // An older copy in the game's map cache could be loaded instead of this file.
-        if let (Target::Map(map), true) = (&target, ctx.clean_client_maps) {
-            let cleaned = client::clean_copies(map, ctx.map_backups.as_deref());
-            if cleaned.removed > 0 {
-                let (copies, title) = (cleaned.describe(), target.title());
-                inner.push(if ctx.map_backups.is_some() { t!("serverlog.cacheBackedUp", copies, title) } else { t!("serverlog.cacheRemoved", copies, title) }, "app");
-            }
-            if cleaned.in_use > 0 {
-                let (n, title) = (cleaned.in_use, target.title());
-                inner.push(if n == 1 { t!("serverlog.cacheInUse.one", title) } else { t!("serverlog.cacheInUse.other", n, title) }, "warn");
-            }
+        for (text, kind) in cleaned.unwrap_or_else(|| clean_game_cache(&target, ctx)) {
+            inner.push(text, kind);
         }
         let launched = platform::launch_console(&ctx.server_dir, &start.file_name(), &[(LAUNCH_ENV, "1")])
             .map_err(|e| t!("error.startFailed", file = start.file_name(), error = e))?;
@@ -619,8 +626,8 @@ impl ServerManager {
 
     fn tick(&self) {
         // A look first: what this round needs from the settings and the disk.
-        let scan = {
-            let mut inner = self.inner.lock().unwrap();
+        let (scan, to_clean) = {
+            let mut inner = self.inner.locked();
             if inner.shutting_down {
                 return;
             }
@@ -629,31 +636,38 @@ impl ServerManager {
             if scan {
                 inner.last_scan = Some(Instant::now());
             }
-            scan
+            // A start that waited for the last server: its turn now.
+            let to_clean = inner.live.is_none().then(|| inner.pending.as_ref().map(|p| (p.target.clone(), p.ctx.clone()))).flatten();
+            (scan, to_clean)
         };
-        // No disk access every round: the server folders are only listed for the scan.
-        let (settings, auto_join, scan_dirs) = {
-            let store = self.store.lock().unwrap();
-            let scan_dirs = scan.then(|| {
-                let mut dirs: Vec<PathBuf> = store.installs().into_iter().map(|(dir, _)| dir).collect();
-                if dirs.is_empty() {
-                    dirs.push(store.server_dir());
-                }
-                dirs
-            });
-            (StartContext::with_dir(&store, PathBuf::new()), store.config.auto_join, scan_dirs)
+        // No disk access while holding the settings: the server folders are listed (for the scan)
+        // from a copy of them.
+        let (settings, auto_join, scan_store) = {
+            let store = self.store.locked();
+            (StartContext::with_dir(&store, PathBuf::new()), store.config.auto_join, scan.then(|| store.clone()))
         };
-        // The slow part outside the lock: reading back the log of a server that was already running.
+        let scan_dirs = scan_store.map(|store| {
+            let mut dirs: Vec<PathBuf> = store.installs().into_iter().map(|(dir, _)| dir).collect();
+            if dirs.is_empty() {
+                dirs.push(store.server_dir());
+            }
+            dirs
+        });
+        // The slow parts outside the lock: reading back the log of a server that was already
+        // running, and the game's map cache for a start that waited.
         let found = scan_dirs.and_then(|dirs| find_running(&dirs));
+        let cleaned = to_clean.map(|(target, ctx)| (clean_game_cache(&target, &ctx), target));
 
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.locked();
         if inner.shutting_down {
             return;
         }
         if inner.live.is_some() {
             self.tick_live(&mut inner, auto_join, &settings);
         } else if let Some(Pending { target, prefab, ctx }) = inner.pending.take() {
-            match self.launch(&mut inner, target, prefab, &ctx) {
+            // (Cleaned for this target, unless another start took its place meanwhile.)
+            let cleaned = cleaned.filter(|(_, cleaned_for)| *cleaned_for == target).map(|(lines, _)| lines);
+            match self.launch(&mut inner, target, prefab, &ctx, cleaned) {
                 Ok(live) => {
                     inner.live = Some(live);
                     inner.last = None;
@@ -757,7 +771,7 @@ impl ServerManager {
                         },
                         Err(e) => e,
                     };
-                    let mut inner = me.inner.lock().unwrap();
+                    let mut inner = me.inner.locked();
                     inner.push(text, "app");
                     inner.dirty = true;
                 });
@@ -788,6 +802,10 @@ impl ServerManager {
                         if let Some(reply) = inner.waiting.remove(&id) {
                             let _ = reply.send(text);
                         }
+                    }
+                    // Too late: whoever asked has given up (an item list mustn't fill the console).
+                    rcon::Event::Reply { id, .. } if inner.abandoned.contains(&id) => {
+                        inner.abandoned.retain(|&a| a != id);
                     }
                     rcon::Event::Reply { id: INFO_ID, text } => {
                         if let Ok(info) = serde_json::from_str::<ServerInfo>(&text) {
@@ -823,6 +841,8 @@ impl ServerManager {
             // command asked for a restart, which a server host is expected to do.
             let self_restart = live.boot.restart_announced && !live.stop_requested && live.process.is_some();
             let crashed = !live.stop_requested && live.phase != Phase::Ready && !self_restart;
+            // Ended by itself after it was ready, not the way `quit` or closing its window ends it.
+            let died = !live.stop_requested && live.phase == Phase::Ready && !self_restart && code.is_some_and(|c| !clean_exit(c));
             if live.stop_requested || live.process.is_none() {
                 // Close the console window too (an older start file may wait for a key).
                 live.kill();
@@ -832,9 +852,10 @@ impl ServerManager {
             live.rcon_connected = false;
             live.message = Some(if live.process.is_none() {
                 t!("serverlog.noStart", file = live.start.as_ref().map_or_else(|| t!("serverlog.theStartFile"), |s| s.file_name()))
-            } else if crashed {
+            } else if crashed || died {
                 let last = live.recent.iter().rev().find(|l| !l.trim().is_empty()).cloned().unwrap_or_default();
-                match code {
+                match code.map(exit_code_text) {
+                    Some(code) if died => t!("serverlog.diedCode", code, last),
                     Some(code) => t!("serverlog.crashedCode", code, last),
                     None => t!("serverlog.crashed", last),
                 }
@@ -852,7 +873,7 @@ impl ServerManager {
                 }
             }
             let message = live.message.clone().unwrap_or_default();
-            out.push((message, if crashed { "error" } else { "app" }, "droplaunch"));
+            out.push((message, if crashed || died { "error" } else { "app" }, "droplaunch"));
             let mut view = live.view(inner.pending.is_some());
             view.ended_at = Some(now_ms());
             view.rcon = false;
@@ -959,6 +980,42 @@ fn find_running(dirs: &[PathBuf]) -> Option<Found> {
         dir: server_dir.to_path_buf(),
     };
     Some(Found { live, pid, lines, reports })
+}
+
+/// Rust's older copies of the map out of the game's map cache, so the game can't load one of them
+/// instead of the file. Lines for the console. Not while holding the lock: moving big maps to
+/// another drive takes a while.
+fn clean_game_cache(target: &Target, ctx: &StartContext) -> Vec<(String, &'static str)> {
+    let mut lines = Vec::new();
+    let Target::Map(map) = target else { return lines };
+    if !ctx.clean_client_maps || !map.is_file() {
+        return lines;
+    }
+    let cleaned = client::clean_copies(map, ctx.map_backups.as_deref());
+    if cleaned.removed > 0 {
+        let (copies, title) = (cleaned.describe(), target.title());
+        lines.push((if ctx.map_backups.is_some() { t!("serverlog.cacheBackedUp", copies, title) } else { t!("serverlog.cacheRemoved", copies, title) }, "app"));
+    }
+    if cleaned.in_use > 0 {
+        let (n, title) = (cleaned.in_use, target.title());
+        lines.push((if n == 1 { t!("serverlog.cacheInUse.one", title) } else { t!("serverlog.cacheInUse.other", n, title) }, "warn"));
+    }
+    lines
+}
+
+/// How a server ends when it's asked to: `quit` (0), or its console window closed or Ctrl+C
+/// (STATUS_CONTROL_C_EXIT).
+fn clean_exit(code: u32) -> bool {
+    code == 0 || code == 0xC000_013A
+}
+
+/// Windows' crash codes read better in hex (0xC0000005: an access violation).
+fn exit_code_text(code: u32) -> String {
+    if code > 0xFFFF {
+        format!("0x{code:08X}")
+    } else {
+        code.to_string()
+    }
 }
 
 fn level_kind(line: &str) -> &'static str {

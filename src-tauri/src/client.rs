@@ -290,9 +290,21 @@ fn cached_maps(dir: &Path) -> Vec<(PathBuf, u64)> {
 /// Where removed maps go when they're kept (in DropLaunch's data folder, a folder per day).
 pub const BACKUP_DIR: &str = "ClientMapBackups";
 
+/// Backed-up maps are kept this many days.
+pub const BACKUP_DAYS: i64 = 30;
+
+/// Seconds since 1970, now.
+pub fn now_secs() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
 /// Today's date as `2026-10-19` (UTC), for the backup folder's name.
 pub fn today() -> String {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    date(now_secs())
+}
+
+/// The date (UTC) of a moment in seconds since 1970, as `2026-10-19`.
+pub fn date(secs: i64) -> String {
     // Days since 1970 to a date (Howard Hinnant's civil_from_days).
     let z = secs.div_euclid(86_400) + 719_468;
     let era = z.div_euclid(146_097);
@@ -326,8 +338,25 @@ fn back_up(path: &Path, backups: &Path) -> std::io::Result<()> {
     })
 }
 
+/// The days' folders in `backups` older than BACKUP_DAYS go (only folders named like a date:
+/// anything else in there was put there by someone else).
+fn prune_backups(backups: &Path) {
+    let oldest = date(now_secs() - BACKUP_DAYS * 86_400);
+    let Ok(entries) = std::fs::read_dir(backups) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let dated = name.len() == 10 && name.bytes().enumerate().all(|(i, b)| if i == 4 || i == 7 { b == b'-' } else { b.is_ascii_digit() });
+        if dated && name < oldest && entry.path().is_dir() {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 /// Deletes the maps, or moves them to `backups` when that's given.
 fn remove(files: impl IntoIterator<Item = (PathBuf, u64)>, backups: Option<&Path>) -> Cleaned {
+    if let Some(dir) = backups {
+        prune_backups(dir);
+    }
     let mut done = Cleaned::default();
     for (path, size) in files {
         let result = match backups {
@@ -437,11 +466,18 @@ mod tests {
         assert_eq!((copies.removed, copies.bytes), (2, 10));
         assert!(cache.join("Island2_555.map").is_file());
 
-        // Kept: moved to the backups (a day's folder) instead.
+        // Kept: moved to the backups (a day's folder) instead. Days' folders past BACKUP_DAYS go,
+        // other folders stay.
         let backups = game.join("backups");
+        for old in ["2000-01-01", "notes"] {
+            std::fs::create_dir_all(backups.join(old)).unwrap();
+            std::fs::write(backups.join(old).join("Old_1.map"), b"12345").unwrap();
+        }
         let all = clear_cache(Some(&backups));
         assert_eq!(all.removed, 2);
-        let day = std::fs::read_dir(&backups).unwrap().next().unwrap().unwrap().path();
+        assert!(!backups.join("2000-01-01").exists());
+        assert!(backups.join("notes").join("Old_1.map").is_file());
+        let day = backups.join(today());
         assert!(day.join("Island2_555.map").is_file() && !cache.join("Island2_555.map").exists());
         assert!(cache.join("notes.txt").is_file(), "only maps");
         std::env::remove_var(DIR_ENV);

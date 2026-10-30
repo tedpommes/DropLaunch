@@ -11,6 +11,10 @@ const EVERY = 250;
 const SETTLE = 400;
 /** And this long after the last one. */
 const QUIET = 500;
+/** A tip follows its target every frame while it moves, and this long after... */
+const MOVING = 600;
+/** ...and otherwise looks this often whether it moved (not 60 times a second for nothing). */
+const LOOK_EVERY = 150;
 
 export function initGuide(ctx) {
   const card = $("guide-card");
@@ -40,6 +44,9 @@ export function initGuide(ctx) {
   const players = () => view()?.info?.players ?? 0;
   const setupOpen = () => !$("setup").hidden;
   const setupOptions = () => setupOpen() && !$("setup-options").hidden && $("setup-tasks").hidden;
+  // The options show before it starts and while the files download (Set up on the welcome screen
+  // starts the download right away).
+  const setupChoosing = () => setupOpen() && !$("setup-options").hidden;
   const setupRunning = () => setupOpen() && !$("setup-tasks").hidden && !$("setup-cancel").hidden;
   const mapsPage = () => !$("view-maps").hidden && !ctx.playtest?.isOpen();
   const panel = (selector) => $("server-panel").querySelector(selector);
@@ -84,15 +91,34 @@ export function initGuide(ctx) {
         const s = ctx.state;
         if (s.framework === "none" || !s.playtest) {
           ctx.showFiles();
-          const mods = $("mods-card");
-          if (mods.classList.contains("folded")) mods.querySelector(".fold-btn").click();
+          unfold("mods-card");
           if (s.framework === "none") toast(t("guide.toast.needsFramework"));
           else showMe("bug-switch");
-        } else if (phase() === "ready") showMe("bug-chat");
-        else toast(t("guide.toast.startAndJoin"));
+        } else if (phase() === "ready") {
+          unfold("bugs-card");
+          showMe("bug-chat");
+        } else toast(t("guide.toast.startAndJoin"));
+      },
+    },
+    {
+      id: "kits",
+      title: t("guide.step.kits.title"),
+      text: "guide.step.kits.text",
+      check: () => Boolean(ctx.kits?.gave()),
+      show: () => {
+        unfold("kits-card");
+        ctx.kits?.pickBuiltIn();
+        showMe("kits");
       },
     },
   ];
+
+  /** A card unfolded, with more options when it's one of theirs (Give items, Bug reports). */
+  function unfold(id) {
+    if (!ctx.expanded) ctx.setExpanded(true);
+    const node = $(id);
+    if (node.classList.contains("folded")) node.querySelector(".fold-btn").click();
+  }
 
   /** Steps happen whether the guide is on or not: they're ticked once seen happening. */
   function trackSteps() {
@@ -110,7 +136,8 @@ export function initGuide(ctx) {
   // In the order they're offered: the first one whose moment has come, that wasn't read yet and
   // whose target is on screen, shows. `manual`: only from Show me.
   const TIPS = [
-    // The setup window.
+    // The setup window: what's downloaded (at its top) comes first, before it runs or while it runs
+    // (Set up on the welcome screen starts it right away).
     {
       id: "setup-downloads",
       when: () => setupOptions() && ctx.state.setupNeeded,
@@ -119,18 +146,25 @@ export function initGuide(ctx) {
       text: "tip.setupDownloads.text",
     },
     {
-      id: "setup-framework",
-      when: setupOptions,
-      target: () => $("setup-framework"),
-      title: t("common.modFramework"),
-      text: "tip.setupFramework.text",
+      id: "setup-running",
+      when: setupRunning,
+      target: () => $("setup-tasks"),
+      title: t("tip.setupRunning.title"),
+      text: "tip.setupRunning.text",
     },
     {
       id: "setup-owner",
-      when: setupOptions,
+      when: setupChoosing,
       target: () => $("setup-owner-row"),
       title: t("tip.setupOwner.title"),
       text: "tip.setupOwner.text",
+    },
+    {
+      id: "setup-framework",
+      when: setupChoosing,
+      target: () => $("setup-framework"),
+      title: t("common.modFramework"),
+      text: "tip.setupFramework.text",
     },
     {
       id: "setup-go",
@@ -138,13 +172,6 @@ export function initGuide(ctx) {
       target: () => $("setup-fix"),
       title: t("tip.setupGo.title"),
       text: "tip.setupGo.text",
-    },
-    {
-      id: "setup-running",
-      when: setupRunning,
-      target: () => $("setup-tasks"),
-      title: t("tip.setupRunning.title"),
-      text: "tip.setupRunning.text",
     },
     // The Maps page.
     {
@@ -185,14 +212,14 @@ export function initGuide(ctx) {
     {
       id: "joined",
       when: () => mapsPage() && phase() === "ready" && players() > 0,
-      target: () => panel(".srv-actions .btn-ghost, .cp-buttons .btn-ghost"),
+      target: () => panel(".srv-mini .btn-ghost, .cp-buttons .btn-ghost"),
       title: t("tip.joined.title"),
       text: () => (ctx.state.owner ? "tip.joined.textOwner" : "tip.joined.text"),
     },
     {
       id: "stop",
       when: () => mapsPage() && phase() === "ready" && seen("joined"),
-      target: () => panel(".srv-actions .btn-danger, .cp-buttons .btn-danger"),
+      target: () => panel(".srv-mini .btn-danger, .cp-buttons .btn-danger"),
       title: t("tip.stop.title"),
       text: "tip.stop.text",
     },
@@ -217,6 +244,21 @@ export function initGuide(ctx) {
       title: t("tip.update.title"),
       text: "tip.update.text",
     },
+    // The side column (more options).
+    {
+      id: "kits",
+      when: () => mapsPage() && ctx.expanded && !ctx.layout?.maximized() && phase() === "ready" && players() > 0,
+      target: () => $("kits-card"),
+      title: t("kits.card.title"),
+      text: "tip.kits.text",
+    },
+    {
+      id: "bugs",
+      when: () => mapsPage() && ctx.expanded && !ctx.layout?.maximized() && !$("bugs-count").hidden,
+      target: () => $("bugs-card"),
+      title: t("tip.bugs.title"),
+      text: "tip.bugs.text",
+    },
     // Only from Show me.
     {
       id: "bug-switch",
@@ -228,7 +270,7 @@ export function initGuide(ctx) {
     {
       id: "bug-chat",
       manual: true,
-      target: () => panel(".pt-open"),
+      target: () => $("bugs-card"),
       title: t("tip.bugChat.title"),
       text: "tip.bugChat.text",
     },
@@ -283,21 +325,34 @@ export function initGuide(ctx) {
     );
     const ring = el("div", { class: "guide-ring", "aria-hidden": "true" });
     document.body.append(ring, node);
-    tip = { def, node, ring, forced, misses: 0, key: "", raf: 0 };
+    tip = { def, node, ring, forced, misses: 0, key: "", raf: 0, timer: 0, movedAt: 0 };
     follow();
   }
 
   /** Keeps the tip next to its target while things move (resizing, scrolling, cards growing). */
   function follow() {
     if (!tip) return;
+    tip.raf = 0;
+    tip.timer = 0;
     const r = tip.def.target()?.getBoundingClientRect();
     const key = r ? `${r.left}|${r.top}|${r.width}|${r.height}|${innerWidth}|${innerHeight}` : "";
     if (r && key !== tip.key) {
       tip.key = key;
+      tip.movedAt = performance.now();
       place(r);
     }
+    if (performance.now() - tip.movedAt < MOVING) tip.raf = requestAnimationFrame(follow);
+    else tip.timer = setTimeout(follow, LOOK_EVERY);
+  }
+
+  /** Scrolling or resizing moves things: follow right away instead of at the next look. */
+  function followNow() {
+    if (!tip || tip.raf) return;
+    clearTimeout(tip.timer);
     tip.raf = requestAnimationFrame(follow);
   }
+  addEventListener("scroll", followNow, { capture: true, passive: true });
+  addEventListener("resize", followNow);
 
   /** Under the target if there's room, else above, beside, or (a big one) over its top. */
   function place(r) {
@@ -341,6 +396,7 @@ export function initGuide(ctx) {
   function hideTip() {
     if (!tip) return;
     cancelAnimationFrame(tip.raf);
+    clearTimeout(tip.timer);
     tip.node.remove();
     tip.ring.remove();
     tip = null;
@@ -372,13 +428,18 @@ export function initGuide(ctx) {
   async function showMe(id, fallback) {
     const def = TIPS.find((d) => d.id === id);
     hideTip();
-    if (!["bug-switch"].includes(id) && $("view-maps").hidden) ctx.setTab("maps");
-    if (ctx.playtest?.isOpen() && id !== "bug-chat") ctx.playtest.close();
-    await new Promise((r) => setTimeout(r, 120));
-    def.target()?.scrollIntoView({ block: "nearest" });
-    await new Promise((r) => requestAnimationFrame(r));
-    if (onScreen(def.target())) showTip(def, true);
-    else toast(fallback ?? plain(textOf(def)));
+    // No other tip meanwhile (a card that just unfolded has one of its own).
+    quietUntil = Date.now() + 2000;
+    if (id !== "bug-switch" && $("view-maps").hidden) ctx.setTab("maps");
+    if (ctx.playtest?.isOpen()) ctx.playtest.close();
+    if (ctx.layout?.maximized()) ctx.layout.setMaximized(null);
+    // The window may still be widening for more options: a moment for the target to get there.
+    for (let tries = 0; tries < 10; tries++) {
+      await new Promise((r) => setTimeout(r, tries ? 100 : 120));
+      def.target()?.scrollIntoView({ block: "nearest" });
+      if (onScreen(def.target())) return showTip(def, true);
+    }
+    toast(fallback ?? plain(textOf(def)));
   }
 
   // ---------------------------------------------------------------- the card

@@ -23,6 +23,7 @@ use tauri::{AppHandle, Emitter};
 use crate::config::ConfigStore;
 use crate::mods::{self, Framework};
 use crate::server::{Phase, PlaytestServer, ServerManager};
+use crate::sync::Locked;
 
 const PLUGIN_FILE: &str = "DropLaunchPlaytest.cs";
 const PLUGIN: &str = include_str!("DropLaunchPlaytest.cs");
@@ -185,6 +186,56 @@ struct VersionMonuments {
 const MONUMENT_VERSIONS: usize = 6;
 
 impl Book {
+    /// Reports from the plugin (their JSON) into the book, numbered, the oldest dropped past
+    /// MAX_REPORTS. None: nothing new; else who to thank (Steam ID, report number).
+    fn file(&mut self, raw: Vec<String>, version: &str) -> Option<Vec<(String, u32)>> {
+        let mut thanks = Vec::new();
+        let mut added = false;
+        for json in raw {
+            let Ok(r) = serde_json::from_str::<Incoming>(&json) else { continue };
+            if r.id.is_empty() || self.reports.iter().any(|old| old.id == r.id) {
+                continue;
+            }
+            // Each map numbers its own reports; with none left (all deleted or cleared) the
+            // next one is #1 again.
+            if self.reports.is_empty() {
+                self.next = 0;
+            }
+            self.next += 1;
+            let n = self.next;
+            let steam_id: String = r.steam_id.chars().filter(char::is_ascii_digit).take(20).collect();
+            if !steam_id.is_empty() {
+                thanks.push((steam_id.clone(), n));
+            }
+            self.reports.push(Report {
+                time: report_time(&r.id).unwrap_or_else(now_ms),
+                id: r.id,
+                n,
+                text: r.text.chars().take(300).collect(),
+                name: r.name.chars().filter(|c| !c.is_control()).take(40).collect(),
+                steam_id,
+                grid: r.grid.chars().take(8).collect(),
+                x: r.x,
+                y: r.y,
+                z: r.z,
+                yaw: r.yaw,
+                pitch: r.pitch,
+                look: r.look.filter(|l| !l.is_empty()).map(|l| l.chars().take(80).collect()),
+                look_at: match (r.look_x, r.look_y, r.look_z) {
+                    (Some(x), Some(y), Some(z)) => Some([x, y, z]),
+                    _ => None,
+                },
+                look_distance: r.look_distance,
+                version: version.to_string(),
+                fixed: None,
+            });
+            added = true;
+        }
+        let extra = self.reports.len().saturating_sub(MAX_REPORTS);
+        self.reports.drain(..extra);
+        added.then_some(thanks)
+    }
+
     /// The names for this version of the map, else the newest known (monuments rarely move).
     fn monuments_for(&self, version: &str) -> Vec<Monument> {
         self.monuments.iter().find(|m| m.version == version).or(self.monuments.first()).map(|m| m.list.clone()).unwrap_or_default()
@@ -412,7 +463,7 @@ fn phase_name(phase: Phase) -> &'static str {
 
 impl Playtest {
     pub fn new(store: Arc<Mutex<ConfigStore>>, server: ServerManager) -> Self {
-        let dir = store.lock().unwrap().data.join("Playtest");
+        let dir = store.locked().data.join("Playtest");
         Self { inner: Arc::default(), server, store, dir, app: Arc::new(OnceLock::new()) }
     }
 
@@ -426,26 +477,29 @@ impl Playtest {
                 let mut last_players: Option<PlayersEvent> = None;
                 loop {
                     std::thread::sleep(TICK);
-                    me.tick();
-                    let view = me.view();
-                    if last.as_ref() != Some(&view) {
-                        let _ = app.emit("playtest", &view);
-                        last = Some(view);
-                    }
-                    let players = me.players_event();
-                    if players != last_players {
-                        if let Some(p) = &players {
-                            let _ = app.emit("playtest-players", p);
+                    // A round that went wrong is in the log; the next one goes on as usual.
+                    crate::sync::survive(|| {
+                        me.tick();
+                        let view = me.view();
+                        if last.as_ref() != Some(&view) {
+                            let _ = app.emit("playtest", &view);
+                            last = Some(view);
                         }
-                        last_players = players;
-                    }
+                        let players = me.players_event();
+                        if players != last_players {
+                            if let Some(p) = &players {
+                                let _ = app.emit("playtest-players", p);
+                            }
+                            last_players = players;
+                        }
+                    });
                 }
             })
             .expect("spawn playtest thread");
     }
 
     fn enabled(&self) -> bool {
-        self.store.lock().unwrap().config.playtest
+        self.store.locked().config.playtest
     }
 
     /// Bug reports are on exactly when the DropLaunch plugin is in the server folder (the running
@@ -454,13 +508,15 @@ impl Playtest {
     /// that's gone means none.
     fn follow_plugin_file(&self) {
         let live = self.server.live_dir();
-        let mut store = self.store.lock().unwrap();
-        if !store.config.linked {
+        // The disk is looked at from a copy of the settings, not while holding them.
+        let settings = self.store.locked().clone();
+        if !settings.config.linked {
             return;
         }
-        let dir = live.unwrap_or_else(|| store.server_dir());
+        let dir = live.unwrap_or_else(|| settings.server_dir());
         let present = plugin_path(&dir).is_some_and(|p| p.is_file());
-        if store.config.playtest != present {
+        if settings.config.playtest != present {
+            let mut store = self.store.locked();
             store.config.playtest = present;
             let _ = store.save();
         }
@@ -468,7 +524,7 @@ impl Playtest {
 
     /// The plugin goes into servers for bug reports, or for the whitelist it checks.
     fn plugin_wanted(&self) -> bool {
-        self.store.lock().unwrap().config.wants_plugin()
+        self.store.locked().config.wants_plugin()
     }
 
     /// The plugin in or out of the running server's folder, as the settings say now.
@@ -489,7 +545,7 @@ impl Playtest {
         }
         if let Some(s) = server.filter(|s| s.phase == Phase::Ready && s.rcon) {
             let due = {
-                let mut st = self.inner.lock().unwrap();
+                let mut st = self.inner.locked();
                 let due = enabled && st.framework.is_some_and(|f| f != Framework::None) && st.last_players.is_none_or(|t| t.elapsed() >= PLAYERS_EVERY);
                 if due {
                     st.last_players = Some(Instant::now());
@@ -506,7 +562,7 @@ impl Playtest {
     /// The names of the map's monuments, once per server run (kept with the map's reports).
     fn ask_monuments(&self, server_id: u64) {
         {
-            let mut st = self.inner.lock().unwrap();
+            let mut st = self.inner.locked();
             if !st.answered || st.monuments_asked {
                 return;
             }
@@ -515,7 +571,7 @@ impl Playtest {
         let Ok(reply) = self.server.rcon_call("droplaunch.monuments", Duration::from_secs(5)) else { return };
         // An older plugin answers "Command not found": it's replaced at the next server start.
         let Ok(found) = serde_json::from_str::<MonumentsReply>(reply.trim()) else { return };
-        let mut st = self.inner.lock().unwrap();
+        let mut st = self.inner.locked();
         if st.server.as_ref().map(|s| s.id) != Some(server_id) {
             return;
         }
@@ -533,7 +589,7 @@ impl Playtest {
         if saved.is_empty() {
             return;
         }
-        let data = self.store.lock().unwrap().data.clone();
+        let data = self.store.locked().data.clone();
         for json in saved {
             match crate::kits::from_game(&data, &json) {
                 Ok(kit) => {
@@ -541,7 +597,7 @@ impl Playtest {
                         let _ = app.emit("kit-saved", &kit);
                     }
                 }
-                Err(e) => eprintln!("kit from the game: {e:#}"),
+                Err(e) => crate::log::write(&format!("kit from the game: {e:#}")),
             }
         }
     }
@@ -551,7 +607,7 @@ impl Playtest {
     fn follow(&self, server: Option<&PlaytestServer>, enabled: bool) {
         let mut load: Option<MapRef> = None;
         let plugin_job = {
-            let mut st = self.inner.lock().unwrap();
+            let mut st = self.inner.locked();
             let id = server.map(|s| s.id);
             if st.server.as_ref().map(|s| s.id) != id {
                 st.answered = false;
@@ -590,7 +646,7 @@ impl Playtest {
         };
         if let Some(map) = load {
             let book = self.read_book(&map.key);
-            let mut st = self.inner.lock().unwrap();
+            let mut st = self.inner.locked();
             if st.map.as_ref().map(|m| &m.key) == Some(&map.key) {
                 st.book = book;
             }
@@ -599,12 +655,12 @@ impl Playtest {
             let framework = mods::detect(&dir);
             if on {
                 if let Err(e) = install_plugin(&dir) {
-                    eprintln!("playtest plugin: {e}");
+                    crate::log::write(&format!("playtest plugin: {e}"));
                 }
             } else {
                 remove_plugin(&dir);
             }
-            let mut st = self.inner.lock().unwrap();
+            let mut st = self.inner.locked();
             st.framework = Some(framework);
             st.plugin_dir = Some((dir, on));
             // Put in or taken out: it runs once it answers again.
@@ -632,70 +688,28 @@ impl Playtest {
             std::fs::rename(&tmp, &path)
         });
         if let Err(e) = result {
-            eprintln!("Could not save the playtest reports: {e}");
+            crate::log::write(&format!("Could not save the playtest reports: {e}"));
         }
     }
 
     fn add_reports(&self, raw: Vec<String>, server: Option<&PlaytestServer>) {
-        if self.inner.lock().unwrap().map.is_none() {
+        if self.inner.locked().map.is_none() {
             if let Some(s) = server {
                 let map = map_ref(s);
                 let book = self.read_book(&map.key);
-                let mut st = self.inner.lock().unwrap();
+                let mut st = self.inner.locked();
                 st.book = book;
                 st.map = Some(map);
             }
         }
-        let mut thanks = Vec::new();
-        {
-            let mut st = self.inner.lock().unwrap();
+        let thanks = {
+            let mut st = self.inner.locked();
             let Some(version) = st.map.as_ref().map(|m| m.version.clone()) else { return };
-            for json in raw {
-                let Ok(r) = serde_json::from_str::<Incoming>(&json) else { continue };
-                if r.id.is_empty() || st.book.reports.iter().any(|old| old.id == r.id) {
-                    continue;
-                }
-                // Each map numbers its own reports; with none left (all deleted or cleared) the
-                // next one is #1 again.
-                if st.book.reports.is_empty() {
-                    st.book.next = 0;
-                }
-                st.book.next += 1;
-                let n = st.book.next;
-                let steam_id: String = r.steam_id.chars().filter(char::is_ascii_digit).take(20).collect();
-                if !steam_id.is_empty() {
-                    thanks.push((steam_id.clone(), n));
-                }
-                st.book.reports.push(Report {
-                    time: report_time(&r.id).unwrap_or_else(now_ms),
-                    id: r.id,
-                    n,
-                    text: r.text.chars().take(300).collect(),
-                    name: r.name.chars().filter(|c| !c.is_control()).take(40).collect(),
-                    steam_id,
-                    grid: r.grid.chars().take(8).collect(),
-                    x: r.x,
-                    y: r.y,
-                    z: r.z,
-                    yaw: r.yaw,
-                    pitch: r.pitch,
-                    look: r.look.filter(|l| !l.is_empty()).map(|l| l.chars().take(80).collect()),
-                    look_at: match (r.look_x, r.look_y, r.look_z) {
-                        (Some(x), Some(y), Some(z)) => Some([x, y, z]),
-                        _ => None,
-                    },
-                    look_distance: r.look_distance,
-                    version: version.clone(),
-                    fixed: None,
-                });
-            }
-            if thanks.is_empty() {
-                return;
-            }
-            let extra = st.book.reports.len().saturating_sub(MAX_REPORTS);
-            st.book.reports.drain(..extra);
+            let Some(thanks) = st.book.file(raw, &version) else { return };
+            // Saved right away, also when nobody gets a thank-you (a report without a Steam ID).
             self.save(&st);
-        }
+            thanks
+        };
         // The tester sees it arrived (only players on this server, through RCON).
         for (steam_id, n) in thanks {
             self.server.rcon_send(&format!("droplaunch.tell {steam_id} {}", t!("bug.thanks", n)));
@@ -704,7 +718,7 @@ impl Playtest {
 
     fn poll_players(&self, server_id: u64) {
         let reply = self.server.rcon_call("droplaunch.players", Duration::from_secs(3));
-        let mut st = self.inner.lock().unwrap();
+        let mut st = self.inner.locked();
         if st.server.as_ref().map(|s| s.id) != Some(server_id) {
             return;
         }
@@ -732,7 +746,7 @@ impl Playtest {
 
     pub fn view(&self) -> PlaytestView {
         let enabled = self.enabled();
-        let st = self.inner.lock().unwrap();
+        let st = self.inner.locked();
         let plugin = match &st.server {
             None => "noServer",
             Some(_) if !enabled => "off",
@@ -755,14 +769,14 @@ impl Playtest {
     }
 
     fn players_event(&self) -> Option<PlayersEvent> {
-        let st = self.inner.lock().unwrap();
+        let st = self.inner.locked();
         st.server.as_ref().map(|s| PlayersEvent { server_id: s.id, players: st.players.clone() })
     }
 
     /// Mark a report fixed (with the map version that runs now) or open again.
     pub fn set_fixed(&self, id: &str, fixed: bool) -> Result<PlaytestView, String> {
         {
-            let mut st = self.inner.lock().unwrap();
+            let mut st = self.inner.locked();
             let version = st.map.as_ref().map(|m| m.version.clone()).unwrap_or_default();
             let report = st.book.reports.iter_mut().find(|r| r.id == id).ok_or_else(|| t!("bug.error.gone"))?;
             report.fixed = fixed.then(|| Fixed { time: now_ms(), version });
@@ -774,7 +788,7 @@ impl Playtest {
     /// How many reports are kept, on how many maps (Settings).
     pub fn summary(&self) -> ReportsSummary {
         let (current, in_memory) = {
-            let st = self.inner.lock().unwrap();
+            let st = self.inner.locked();
             (st.map.as_ref().map(|m| m.key.clone()), st.book.reports.len())
         };
         let mut out = ReportsSummary::default();
@@ -808,7 +822,7 @@ impl Playtest {
     pub fn clear_all(&self) -> Result<usize, String> {
         {
             // What's in memory first: the current map's newest reports.
-            let st = self.inner.lock().unwrap();
+            let st = self.inner.locked();
             self.save(&st);
         }
         let cleared = self.dir.join("Cleared");
@@ -828,7 +842,7 @@ impl Playtest {
             let text = serde_json::to_vec_pretty(&book).unwrap_or_default();
             std::fs::write(&path, text).map_err(|e| t!("bug.error.clear", error = e))?;
         }
-        let mut st = self.inner.lock().unwrap();
+        let mut st = self.inner.locked();
         st.book.reports.clear();
         st.book.next = 0;
         Ok(count)
@@ -836,7 +850,7 @@ impl Playtest {
 
     pub fn delete(&self, id: &str) -> Result<PlaytestView, String> {
         {
-            let mut st = self.inner.lock().unwrap();
+            let mut st = self.inner.locked();
             let before = st.book.reports.len();
             st.book.reports.retain(|r| r.id != id);
             if st.book.reports.len() == before {
@@ -858,7 +872,7 @@ impl Playtest {
             None => ("procedural-map".into(), "Procedural map".into()),
         };
         let book = {
-            let st = self.inner.lock().unwrap();
+            let st = self.inner.locked();
             st.map.as_ref().filter(|m| m.key == key).map(|_| st.book.clone())
         };
         let book = book.unwrap_or_else(|| self.read_book(&key));
@@ -868,7 +882,7 @@ impl Playtest {
     /// Teleport testers to a spot on the map (the plugin finds the ground there): one of them by
     /// Steam id, or everyone on the server (None). How many went.
     pub fn teleport_to(&self, x: f32, z: f32, player: Option<&str>) -> Result<u32, String> {
-        if !self.inner.lock().unwrap().answered {
+        if !self.inner.locked().answered {
             return Err(t!("bug.error.noPlugin"));
         }
         let target = match player {
@@ -890,13 +904,13 @@ impl Playtest {
 
     /// Teleport the host (the server's owner) to a report's spot, or to a tester.
     pub fn teleport(&self, report: Option<&str>, player: Option<&str>) -> Result<(), String> {
-        let owner = self.store.lock().unwrap().config.owner.clone();
+        let owner = self.store.locked().config.owner.clone();
         let owner = owner.filter(|o| !o.steam_id.is_empty() && o.steam_id.chars().all(|c| c.is_ascii_digit()));
         let Some(owner) = owner else {
             return Err(t!("bug.error.noOwner"));
         };
         let (x, y, z, yaw) = {
-            let st = self.inner.lock().unwrap();
+            let st = self.inner.locked();
             if !st.answered {
                 return Err(t!("bug.error.noPlugin"));
             }
@@ -919,7 +933,7 @@ impl Playtest {
     pub fn set_enabled(&self, on: bool) -> Result<PlaytestView, String> {
         let live = self.server.live_dir();
         let dirs = {
-            let mut store = self.store.lock().unwrap();
+            let mut store = self.store.locked();
             // The whitelist is checked by the same plugin: it stays (and so do bug reports).
             if !on && store.config.whitelist_ids().is_some() {
                 return Err(t!("bug.error.whitelist"));
@@ -941,7 +955,7 @@ impl Playtest {
             }
         }
         if on && !placed {
-            self.store.lock().unwrap().config.playtest = false;
+            self.store.locked().config.playtest = false;
             return Err(t!("job.plugin.needs"));
         }
         self.sync_plugin();
@@ -951,7 +965,7 @@ impl Playtest {
     /// The picture of the map the reports are for: the custom map's file, or the procedural map
     /// the server made.
     pub fn picture(&self) -> Result<Arc<mapview::Picture>, String> {
-        let map = self.inner.lock().unwrap().map.clone().ok_or_else(|| t!("bug.error.noMap"))?;
+        let map = self.inner.locked().map.clone().ok_or_else(|| t!("bug.error.noMap"))?;
         let file = match (&map.file, &map.identity_dir) {
             (Some(file), _) => file.clone(),
             (None, Some(dir)) => mapview::newest_map(dir).ok_or_else(|| t!("bug.error.notBuilt"))?,
@@ -993,6 +1007,18 @@ mod tests {
         let ticks = ms * 10_000 + 621_355_968_000_000_000;
         assert_eq!(report_time(&format!("{ticks}-76561198000000000")), Some(ms));
         assert_eq!(report_time("garbage"), None);
+    }
+
+    /// A report without a Steam ID (nobody to thank) counts as new too: it gets saved.
+    #[test]
+    fn reports_are_filed_with_or_without_a_steam_id() {
+        let mut book = Book::default();
+        let thanks = book.file(vec![r#"{"id":"1","name":"Console","text":"a rock floats"}"#.into()], "Island_v2.map");
+        assert_eq!(thanks, Some(Vec::new()));
+        let thanks = book.file(vec![r#"{"id":"2","steamId":"7656119800000000x1","text":"hole"}"#.into(), "not json".into()], "Island_v2.map");
+        assert_eq!(thanks, Some(vec![("76561198000000001".to_string(), 2)]));
+        assert_eq!(book.file(vec![r#"{"id":"2","text":"hole"}"#.into()], "Island_v2.map"), None, "seen before");
+        assert_eq!(book.reports.iter().map(|r| (r.n, r.text.as_str())).collect::<Vec<_>>(), [(1, "a rock floats"), (2, "hole")]);
     }
 
     #[test]

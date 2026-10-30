@@ -60,6 +60,7 @@ mod imp {
     use std::path::PathBuf;
     use std::sync::mpsc::{self, Sender};
     use std::sync::{Mutex, OnceLock};
+    use crate::sync::Locked;
     use tauri::{AppHandle, Emitter, Manager};
     use windows::core::{IInspectable, Interface, HSTRING};
     use windows::Data::Xml::Dom::XmlDocument;
@@ -80,7 +81,7 @@ mod imp {
                 .spawn(move || {
                     // SAFETY: called once on this thread before any WinRT use.
                     let _ = unsafe { windows::Win32::System::Com::CoInitializeEx(None, windows::Win32::System::Com::COINIT_MULTITHREADED) };
-                    let icon = register();
+                    let icon = register(&app);
                     let mut shown: Vec<ToastNotification> = Vec::new();
                     for toast in rx {
                         match make(&app, &toast, icon.as_deref()) {
@@ -90,14 +91,14 @@ mod imp {
                                     shown.remove(0);
                                 }
                             }
-                            Err(e) => eprintln!("notification failed: {e}"),
+                            Err(e) => crate::log::write(&format!("notification failed: {e}")),
                         }
                     }
                 })
                 .expect("spawn notifications thread");
             Mutex::new(tx)
         });
-        worker.lock().unwrap().send(toast).map_err(|_| crate::t!("notify.error.unavailable"))
+        worker.locked().send(toast).map_err(|_| crate::t!("notify.error.unavailable"))
     }
 
     fn make(app: &AppHandle, toast: &Toast, icon: Option<&str>) -> windows::core::Result<ToastNotification> {
@@ -121,15 +122,16 @@ mod imp {
     }
 
     /// DropLaunch's name and icon for its notifications. Returns the icon's path.
-    fn register() -> Option<String> {
+    fn register(app: &AppHandle) -> Option<String> {
         let key = format!(r"Software\Classes\AppUserModelId\{APP_ID}");
         let _ = crate::platform::set_user_registry_string(&key, "DisplayName", "DropLaunch");
         let dir = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?.join("DropLaunch");
         let icon = dir.join("notification-icon.png");
-        let bytes = include_bytes!("../icons/icon.png");
+        // The UI's logo (the app icon): already in the exe once.
+        let bytes = app.asset_resolver().get("logo.png".into())?.bytes;
         if std::fs::metadata(&icon).map_or(true, |m| m.len() != bytes.len() as u64) {
             std::fs::create_dir_all(&dir).ok()?;
-            std::fs::write(&icon, bytes).ok()?;
+            std::fs::write(&icon, &bytes).ok()?;
         }
         let path = icon.display().to_string();
         let _ = crate::platform::set_user_registry_string(&key, "IconUri", &path);
