@@ -20,14 +20,14 @@ jobs:
       run:
         working-directory: src-tauri
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Rust
         run: |
           rustup toolchain install stable --profile minimal
           rustup default stable
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -46,7 +46,7 @@ jobs:
           Copy-Item target\release\droplaunch.exe ..\out\DropLaunch.exe
 
       - name: Keep the exe
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: DropLaunch
           path: out/DropLaunch.exe

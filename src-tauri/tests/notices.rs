@@ -7,14 +7,35 @@ fn notices() -> Value {
     serde_json::from_str(include_str!("../../ui/licenses.json")).expect("ui/licenses.json")
 }
 
+/// Cargo.lock without DropLaunch's own version: a new release doesn't change the libraries.
+/// (The same in examples/notices.rs.)
+fn lock_hash(lock: &str) -> String {
+    let lock = lock.replace("\r\n", "\n");
+    let mut lines: Vec<&str> = lock.split('\n').collect();
+    if let Some(i) = lines.iter().position(|l| *l == "name = \"droplaunch\"") {
+        if lines.get(i + 1).is_some_and(|l| l.starts_with("version = ")) {
+            lines.remove(i + 1);
+        }
+    }
+    blake3::hash(lines.join("\n").as_bytes()).to_hex().to_string()
+}
+
 #[test]
 fn third_party_notices_are_up_to_date() {
-    let lock = include_str!("../Cargo.lock").replace("\r\n", "\n");
     assert_eq!(
         notices()["cargoLock"].as_str(),
-        Some(blake3::hash(lock.as_bytes()).to_hex().as_str()),
+        Some(lock_hash(include_str!("../Cargo.lock")).as_str()),
         "the dependencies changed since ui/licenses.json was made: run `cargo run --example notices`"
     );
+}
+
+#[test]
+fn a_new_version_of_droplaunch_alone_needs_no_new_notices() {
+    let lock = include_str!("../Cargo.lock").replace("\r\n", "\n");
+    let own = format!("name = \"droplaunch\"\nversion = \"{}\"", env!("CARGO_PKG_VERSION"));
+    let bumped = lock.replace(&own, "name = \"droplaunch\"\nversion = \"99.0.0\"");
+    assert_ne!(bumped, lock, "DropLaunch's own entry wasn't found in Cargo.lock");
+    assert_eq!(lock_hash(&bumped), lock_hash(&lock));
 }
 
 /// Words that show a file is the text of a license (by its SPDX id).

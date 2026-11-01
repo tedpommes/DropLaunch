@@ -1,6 +1,6 @@
 {
   "about": "Libraries compiled into DropLaunch (Windows build), made by `cargo run --example notices`.",
-  "cargoLock": "1f61857263ebecaaa28a09722da0186feeee33743c81752a900d58ba1b2e3c3a",
+  "cargoLock": "4aaa60ecff20a339e421565676f6e907b7bbda1c5bc183bbf69d38c7b0f67101",
   "crates": [
     {
       "authors": [

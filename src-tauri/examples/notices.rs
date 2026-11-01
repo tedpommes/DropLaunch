@@ -111,11 +111,11 @@ fn main() {
         .collect();
     crates.sort_by_key(|c| (c["name"].as_str().unwrap().to_lowercase(), c["version"].as_str().unwrap().to_string()));
 
-    let lock = std::fs::read_to_string(root.join("Cargo.lock")).expect("Cargo.lock").replace("\r\n", "\n");
+    let lock = std::fs::read_to_string(root.join("Cargo.lock")).expect("Cargo.lock");
     let notices = json!({
         "about": "Libraries compiled into DropLaunch (Windows build), made by `cargo run --example notices`.",
         "target": TARGET,
-        "cargoLock": blake3::hash(lock.as_bytes()).to_hex().as_str(),
+        "cargoLock": lock_hash(&lock),
         "crates": crates,
         "texts": texts,
     });
@@ -126,6 +126,19 @@ fn main() {
     if !without.is_empty() {
         println!("without license files of their own ({}): {}", without.len(), without.join(", "));
     }
+}
+
+/// Cargo.lock without DropLaunch's own version: a new release doesn't change the libraries.
+/// (The same in tests/notices.rs.)
+fn lock_hash(lock: &str) -> String {
+    let lock = lock.replace("\r\n", "\n");
+    let mut lines: Vec<&str> = lock.split('\n').collect();
+    if let Some(i) = lines.iter().position(|l| *l == "name = \"droplaunch\"") {
+        if lines.get(i + 1).is_some_and(|l| l.starts_with("version = ")) {
+            lines.remove(i + 1);
+        }
+    }
+    blake3::hash(lines.join("\n").as_bytes()).to_hex().to_string()
 }
 
 /// The license and notice files a package ships (`LICENSE-MIT`, `COPYING`, `LICENSES/x.txt`...).
