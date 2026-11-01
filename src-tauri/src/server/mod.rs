@@ -850,10 +850,13 @@ impl ServerManager {
             live.phase = if crashed { Phase::Crashed } else { Phase::Stopped };
             live.rcon = None;
             live.rcon_connected = false;
+            let last = live.recent.iter().rev().find(|l| !l.trim().is_empty()).cloned().unwrap_or_default();
+            if crashed || died {
+                crate::log::write(&crash_log_line(live, code, died, &last));
+            }
             live.message = Some(if live.process.is_none() {
                 t!("serverlog.noStart", file = live.start.as_ref().map_or_else(|| t!("serverlog.theStartFile"), |s| s.file_name()))
             } else if crashed || died {
-                let last = live.recent.iter().rev().find(|l| !l.trim().is_empty()).cloned().unwrap_or_default();
                 match code.map(exit_code_text) {
                     Some(code) if died => t!("serverlog.diedCode", code, last),
                     Some(code) => t!("serverlog.crashedCode", code, last),
@@ -1009,6 +1012,19 @@ fn clean_exit(code: u32) -> bool {
     code == 0 || code == 0xC000_013A
 }
 
+/// How a server went down, for droplaunch.log: in English whatever the language, as it's read
+/// in bug reports. `last`: the last line it logged.
+fn crash_log_line(live: &Live, code: Option<u32>, died: bool, last: &str) -> String {
+    let file = live.start.as_ref().map_or_else(|| "its start file".to_string(), |s| s.file_name());
+    if live.process.is_none() {
+        return format!("Server \"{}\": {file} ended before RustDedicated.exe started", live.title);
+    }
+    let how = if died { "stopped unexpectedly" } else { "stopped while starting" };
+    let code = code.map_or_else(|| "unknown".to_string(), exit_code_text);
+    let seconds = (now_ms() - live.started_at).max(0) / 1000;
+    format!("Server \"{}\" ({file}) {how} after {seconds} s, exit code {code}. Last line: {}", live.title, last.trim())
+}
+
 /// Windows' crash codes read better in hex (0xC0000005: an access violation).
 fn exit_code_text(code: u32) -> String {
     if code > 0xFFFF {
@@ -1149,5 +1165,45 @@ mod tests {
         let json = r#"{"Hostname":"x","MaxPlayers":10,"Players":1,"Queued":0,"Joining":0,"EntityCount":31337,"Framerate":256.0,"Uptime":42}"#;
         let info: ServerInfo = serde_json::from_str(json).unwrap();
         assert_eq!((info.players, info.max_players, info.entity_count, info.uptime), (1, 10, 31337, 42));
+    }
+
+    fn booting(process: Option<ProcessHandle>) -> Live {
+        Live {
+            id: 1,
+            title: "Procedural map".into(),
+            target: None,
+            prefab: false,
+            start: None,
+            process,
+            shell_pid: None,
+            job: None,
+            spawn_deadline: Instant::now(),
+            phase: Phase::Booting,
+            boot: Tracker::default(),
+            tail: None,
+            rcon: None,
+            rcon_connected: false,
+            info: None,
+            last_info: None,
+            started_at: now_ms() - 52_000,
+            ready_at: None,
+            stop_requested: false,
+            stop_deadline: None,
+            attached: false,
+            recent: VecDeque::new(),
+            message: None,
+            branch: None,
+            dir: PathBuf::new(),
+        }
+    }
+
+    #[test]
+    fn crash_log_line_has_the_exit_code_and_last_line() {
+        // (This test's own process stands in for RustDedicated.exe: only its presence counts.)
+        let live = booting(ProcessHandle::open(std::process::id()));
+        let line = crash_log_line(&live, Some(0xC000_0005), false, " [Rust.MapCache] Map uploaded ");
+        assert_eq!(line, "Server \"Procedural map\" (its start file) stopped while starting after 52 s, exit code 0xC0000005. Last line: [Rust.MapCache] Map uploaded");
+        assert!(crash_log_line(&live, None, true, "").contains("stopped unexpectedly after 52 s, exit code unknown."));
+        assert_eq!(crash_log_line(&booting(None), None, false, ""), "Server \"Procedural map\": its start file ended before RustDedicated.exe started");
     }
 }

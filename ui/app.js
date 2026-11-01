@@ -1028,7 +1028,8 @@ function showSetup() {
   renderStrip();
 }
 
-/** After a good setup the window closes by itself: the Maps page shows the server starting. */
+/** After a good setup with Continue when done ticked, the window closes by itself: the Maps page
+ * shows the server starting. */
 function startCountdown() {
   stopCountdown();
   const button = $("setup-close");
@@ -1239,6 +1240,7 @@ function showSetupView(view) {
   if (running) $("setup-later").textContent = t("setup.hide");
   $("setup-later").title = running ? t("setup.hide.title") : "";
   $("setup-cancel").hidden = !running;
+  $("setup-auto-row").hidden = !running;
   $("setup-fix").hidden = running;
   $("setup-close").hidden = true;
   $("setup-actions").classList.remove("centered");
@@ -1356,6 +1358,8 @@ async function runSetup() {
         ? t("setup.lead.runningMap", { map })
         : t("setup.lead.running");
   setupState.running = true;
+  // Unticked: once it's done the window waits for Continue.
+  $("setup-auto").checked = false;
   // Something to download: the options stay open meanwhile.
   setupState.live = !(state.steamcmdFound ?? state.steamcmdInstalled) || !serverHere;
   showSetupView("running");
@@ -1415,7 +1419,7 @@ async function runSetup() {
   if (summary.ok) {
     setupState.startMap = null;
     $("setup-actions").classList.add("centered");
-    startCountdown();
+    if ($("setup-auto").checked) startCountdown();
   }
 }
 

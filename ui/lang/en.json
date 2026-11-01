@@ -134,6 +134,7 @@
     "setup.framework.carbon": "Recommended",
     "setup.fix": "Fix everything",
     "setup.continue": "Continue",
+    "setup.autoContinue": "Continue when done",
     "setup.install": "Install {branch}",
     "setup.apply": "Apply",
     "setup.start.map": "Create the start files and <strong>start {map}</strong> when done",

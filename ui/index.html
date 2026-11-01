@@ -468,6 +468,11 @@
         <div class="setup-actions" id="setup-actions">
           <button class="btn btn-link" id="setup-later" data-t="setup.later"></button>
           <span class="spacer"></span>
+          <label class="check setup-auto" id="setup-auto-row" hidden>
+            <input type="checkbox" id="setup-auto" />
+            <span class="box"><svg><use href="#i-check" /></svg></span>
+            <span class="check-text" data-t="setup.autoContinue"></span>
+          </label>
           <button class="btn btn-danger" id="setup-cancel" hidden><svg><use href="#i-x" /></svg><span data-t="common.cancel"></span></button>
           <button class="btn btn-primary btn-lg" id="setup-fix"><svg><use href="#i-wrench" /></svg><span id="setup-fix-label" data-t="setup.fix"></span></button>
           <button class="btn btn-primary btn-lg countdown" id="setup-close" hidden><span id="setup-close-label" data-t="setup.continue"></span><i class="countdown-bar" id="setup-countdown"></i></button>

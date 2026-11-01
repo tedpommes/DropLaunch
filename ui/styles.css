@@ -3482,6 +3482,18 @@ a.ext-link:hover {
   justify-content: center;
 }
 
+/* Continue when done, next to Cancel while it runs. */
+.check.setup-auto {
+  align-items: center;
+  margin-right: 6px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.check.setup-auto .box {
+  margin-top: 0;
+}
+
 .setup-actions.centered .spacer,
 .setup-actions.centered .btn-link {
   display: none;
