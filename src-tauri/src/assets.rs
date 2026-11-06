@@ -1,14 +1,19 @@
 //! Dropped assets: what was dropped on DropLaunch (its window or its exe) — maps, zips with maps,
-//! language files, kit files — kept in dropped.json in the data folder, newest first, each with
+//! language files, kit files, start files — kept in dropped.json in the data folder, newest first, each with
 //! the DropLaunch folder it was dropped on (a DropLaunch in another folder doesn't list them).
 //! Settings shows them by kind, with the start files of the server folders and the kits.
 use std::path::Path;
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
+
+use crate::sync::Locked;
 
 pub const DROPPED_FILE: &str = "dropped.json";
 /// The newest this many are kept.
 const KEEP: usize = 300;
+/// One change to the list at a time (each reads it, changes it and writes it back).
+static CHANGING: Mutex<()> = Mutex::new(());
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -17,6 +22,7 @@ pub enum Kind {
     Zip,
     Language,
     Kit,
+    StartFile,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -27,7 +33,7 @@ pub struct Dropped {
     pub path: String,
     /// When, seconds since 1970.
     pub added: i64,
-    /// A zip's maps (where DropLaunch unpacked them); a language's or kit's own copy.
+    /// A zip's maps (where DropLaunch unpacked them); a language's, kit's or start file's own copy.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub made: Vec<String>,
     /// The DropLaunch folder it was dropped on ("": by an older version, before folders were kept).
@@ -58,6 +64,7 @@ fn save(data: &Path, list: &[Dropped]) {
 
 /// Dropped just now on the DropLaunch in `folder` (the same file dropped again moves to the top).
 pub fn record(data: &Path, folder: &str, kind: Kind, path: &Path, made: Vec<String>) {
+    let _one = CHANGING.locked();
     let mut list = load(data);
     let path = path.display().to_string();
     list.retain(|d| !(d.kind == kind && d.path.eq_ignore_ascii_case(&path) && (d.folder.is_empty() || d.folder.eq_ignore_ascii_case(folder))));
@@ -68,8 +75,17 @@ pub fn record(data: &Path, folder: &str, kind: Kind, path: &Path, made: Vec<Stri
 
 /// Taken off the list (the file itself stays).
 pub fn forget(data: &Path, path: &str) {
+    let _one = CHANGING.locked();
     let mut list = load(data);
     list.retain(|d| !d.path.eq_ignore_ascii_case(path));
+    save(data, &list);
+}
+
+/// Taken off the list by what DropLaunch made of it (a start file's copy that was removed).
+pub fn forget_made(data: &Path, made: &str) {
+    let _one = CHANGING.locked();
+    let mut list = load(data);
+    list.retain(|d| !d.made.iter().any(|m| m.eq_ignore_ascii_case(made)));
     save(data, &list);
 }
 
@@ -94,6 +110,29 @@ mod tests {
         assert_eq!(list[1].made.len(), 1);
         forget(&data, r"C:\B.ZIP");
         assert_eq!(load_for(&data, here, false).len(), 1);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// Several drops recorded at once (a second launch, kits, themes and languages handed over
+    /// together): none is lost.
+    #[test]
+    fn drops_at_the_same_time_are_all_kept() {
+        let data = std::env::temp_dir().join(format!("droplaunch-dropped-many-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        let threads: Vec<_> = (0..8)
+            .map(|t| {
+                let data = data.clone();
+                std::thread::spawn(move || {
+                    for n in 0..10 {
+                        record(&data, r"C:\DropLaunch", Kind::Map, Path::new(&format!(r"C:\{t}-{n}.map")), vec![]);
+                    }
+                })
+            })
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(load_for(&data, r"C:\DropLaunch", false).len(), 80);
         let _ = std::fs::remove_dir_all(&data);
     }
 

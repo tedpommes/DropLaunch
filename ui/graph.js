@@ -2,10 +2,13 @@
 // (newest on the right), with the values under the mouse. The server's performance uses them.
 import { el } from "./util.js";
 import { t } from "./i18n.js";
+import { color } from "./theme.js";
 
 /** Redraws at most this often while a graph is on screen (it scrolls smoothly in between samples). */
 const FRAME_MS = 50;
 const graphs = new Set();
+// Another theme: drawn again in its colours.
+window.addEventListener("themechange", () => graphs.forEach((graph) => graph.draw()));
 
 document.addEventListener("visibilitychange", () => {
   for (const g of graphs) g.wake();
@@ -35,8 +38,13 @@ export function niceBytes(v) {
   return niceCeil(v / unit) * unit;
 }
 
+/** A series' colour: a theme colour's name (--ok) or a colour. */
+const paint = (c) => (c.startsWith("--") ? color(c) : c);
+/** The same for CSS. */
+const swatch = (c) => (c.startsWith("--") ? `var(${c})` : c);
+
 function rgba(hex, alpha) {
-  const n = Number.parseInt(hex.slice(1), 16);
+  const n = Number.parseInt(hex.slice(1, 7), 16);
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
@@ -157,7 +165,7 @@ export class LiveGraph {
     const last = this.samples.at(-1)?.v ?? {};
     this.legend.replaceChildren(
       ...this.view.series.map((s) =>
-        el("span", { class: "graph-key" }, el("i", { style: `background:${s.color}` }), el("span", { text: s.label }), el("b", { text: last[s.key] == null ? "–" : this.formatOf(s)(last[s.key]) })),
+        el("span", { class: "graph-key" }, el("i", { style: `background:${swatch(s.color)}` }), el("span", { text: s.label }), el("b", { text: last[s.key] == null ? "–" : this.formatOf(s)(last[s.key]) })),
       ),
       ...(this.extra ? [el("span", { class: "graph-extra", text: this.extra })] : []),
     );
@@ -219,7 +227,8 @@ export class LiveGraph {
     const yOf = (series) => (v) => bottom - (Math.max(0, v ?? 0) / maxes.get(series.key)) * (bottom - top);
 
     // Faint lines at a quarter, half and three quarters of the scale.
-    g.strokeStyle = "rgba(255, 255, 255, 0.06)";
+    const overlay = color("--overlay-rgb");
+    g.strokeStyle = `rgb(${overlay} / 0.06)`;
     g.lineWidth = 1;
     g.beginPath();
     for (let i = 1; i <= 3; i++) {
@@ -235,8 +244,8 @@ export class LiveGraph {
       if (p.length < 2) continue;
       // Many lines at once: lighter fills, so they don't cover each other.
       const fill = g.createLinearGradient(0, top, 0, bottom);
-      fill.addColorStop(0, rgba(series.color, view.separate ? 0.14 : 0.42));
-      fill.addColorStop(1, rgba(series.color, 0.02));
+      fill.addColorStop(0, rgba(paint(series.color), view.separate ? 0.14 : 0.42));
+      fill.addColorStop(1, rgba(paint(series.color), 0.02));
       g.beginPath();
       curve(g, p);
       g.lineTo(p.at(-1)[0], bottom);
@@ -246,14 +255,14 @@ export class LiveGraph {
       g.fill();
       g.beginPath();
       curve(g, p);
-      g.strokeStyle = series.color;
+      g.strokeStyle = paint(series.color);
       g.lineWidth = 1.6;
       g.stroke();
     }
 
     this.font ??= `600 10.5px ${getComputedStyle(this.plot).fontFamily}`;
     g.font = this.font;
-    g.fillStyle = "rgba(255, 255, 255, 0.42)";
+    g.fillStyle = `rgb(${overlay} / 0.42)`;
     g.textBaseline = "top";
     g.fillText(view.separate ? t("perf.separate") : view.format(shared), 6, 3);
     if (!points.length) {
@@ -270,7 +279,7 @@ export class LiveGraph {
     }
     const near = points.reduce((best, s) => (Math.abs(x(s.t) - this.hover) < Math.abs(x(best.t) - this.hover) ? s : best));
     const nx = Math.round(x(near.t)) + 0.5;
-    g.strokeStyle = "rgba(255, 255, 255, 0.3)";
+    g.strokeStyle = `rgb(${overlay} / 0.3)`;
     g.beginPath();
     g.moveTo(nx, top - 4);
     g.lineTo(nx, bottom);
@@ -278,12 +287,12 @@ export class LiveGraph {
     for (const series of view.series) {
       g.beginPath();
       g.arc(nx, yOf(series)(near.v[series.key]), 3, 0, Math.PI * 2);
-      g.fillStyle = series.color;
+      g.fillStyle = paint(series.color);
       g.fill();
     }
     this.tip.replaceChildren(
       el("span", { class: "graph-tip-time", text: ago(Date.now() - near.t) }),
-      ...view.series.map((s) => el("span", {}, el("i", { style: `background:${s.color}` }), el("span", { text: `${s.label} ${this.formatOf(s)(near.v[s.key] ?? 0)}` }))),
+      ...view.series.map((s) => el("span", {}, el("i", { style: `background:${swatch(s.color)}` }), el("span", { text: `${s.label} ${this.formatOf(s)(near.v[s.key] ?? 0)}` }))),
     );
     if (!this.tip.isConnected) document.body.append(this.tip);
     this.tip.hidden = false;

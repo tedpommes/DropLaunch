@@ -35,13 +35,13 @@ impl Framework {
 // mirrored elsewhere: Carbon is GPL-3.0, and the RustEdit extension has no license (all rights
 // reserved by its author).
 #[cfg(windows)]
-const CARBON_URL: &str = "https://github.com/CarbonCommunity/Carbon/releases/download/production_build/Carbon.Windows.Release.zip";
+pub(crate) const CARBON_URL: &str = "https://github.com/CarbonCommunity/Carbon/releases/download/production_build/Carbon.Windows.Release.zip";
 #[cfg(not(windows))]
-const CARBON_URL: &str = "https://github.com/CarbonCommunity/Carbon/releases/download/production_build/Carbon.Linux.Release.tar.gz";
+pub(crate) const CARBON_URL: &str = "https://github.com/CarbonCommunity/Carbon/releases/download/production_build/Carbon.Linux.Release.tar.gz";
 #[cfg(windows)]
-const OXIDE_URL: &str = "https://github.com/OxideMod/Oxide.Rust/releases/latest/download/Oxide.Rust.zip";
+pub(crate) const OXIDE_URL: &str = "https://github.com/OxideMod/Oxide.Rust/releases/latest/download/Oxide.Rust.zip";
 #[cfg(not(windows))]
-const OXIDE_URL: &str = "https://github.com/OxideMod/Oxide.Rust/releases/latest/download/Oxide.Rust-linux.zip";
+pub(crate) const OXIDE_URL: &str = "https://github.com/OxideMod/Oxide.Rust/releases/latest/download/Oxide.Rust-linux.zip";
 const RUSTEDIT_URL: &str = "https://raw.githubusercontent.com/k1lly0u/Oxide.Ext.RustEdit/master/Oxide.Ext.RustEdit.dll";
 const RUSTEDIT_DLL: &str = "Oxide.Ext.RustEdit.dll";
 
@@ -81,8 +81,10 @@ pub fn oxide_needs_reapply(server_dir: &Path) -> bool {
 fn oxide_patched(server_dir: &Path) -> bool {
     use std::sync::Mutex;
     use std::time::SystemTime;
-    // The check reads a ~10 MB file, so remember the answer until the file changes.
-    static CACHE: Mutex<Option<(PathBuf, u64, Option<SystemTime>, bool)>> = Mutex::new(None);
+    // The check reads a ~10 MB file, so remember the answer until the file changes: the file,
+    // its size and time, and the answer.
+    type Answer = (PathBuf, u64, Option<SystemTime>, bool);
+    static CACHE: Mutex<Option<Answer>> = Mutex::new(None);
     let file = managed_dir(server_dir).join("Assembly-CSharp.dll");
     let Ok(meta) = std::fs::metadata(&file) else { return false };
     let key = (file.clone(), meta.len(), meta.modified().ok());

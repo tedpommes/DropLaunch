@@ -146,6 +146,12 @@ pub struct Imported {
     pub files: Vec<String>,
     /// ... and start files (their settings go into the map's own start files).
     pub start_files: Vec<String>,
+    /// Start files a .zip held that aren't a map's (a procedural map's, or the only thing in it):
+    /// the zip, the file's name and its text. They're kept like start files dropped on DropLaunch...
+    #[serde(skip)]
+    pub scripts: Vec<(PathBuf, String, String)>,
+    /// ... and this is what became of them.
+    pub kept_start_files: Vec<startfile::Kept>,
 }
 
 /// Dropped files: .map files are used where they are (like v1, so a re-export is picked up on
@@ -170,11 +176,12 @@ pub fn import(paths: &[PathBuf], maps_dir: &Path) -> Imported {
             }
         } else if has_ext(path, "zip") {
             match unzip_maps(path, maps_dir) {
-                Ok(z) if z.maps.is_empty() && z.files.is_empty() => out.problems.push(t!("maps.import.emptyZip", name)),
+                Ok(z) if z.maps.is_empty() && z.files.is_empty() && z.scripts.is_empty() => out.problems.push(t!("maps.import.emptyZip", name)),
                 Ok(z) => {
                     out.maps.extend(z.maps.iter().map(|p| p.display().to_string()));
                     out.files.extend(z.files.iter().map(|p| p.display().to_string()));
                     out.start_files.extend(z.start_files.iter().map(|p| p.display().to_string()));
+                    out.scripts.extend(z.scripts.into_iter().map(|(file, text)| (path.clone(), file, text)));
                 }
                 Err(e) => out.problems.push(format!("{name}: {e:#}")),
             }
@@ -191,13 +198,20 @@ struct Unzipped {
     maps: Vec<PathBuf>,
     /// .json files (a kit, a language file).
     files: Vec<PathBuf>,
-    /// Start files (.bat / .sh that run RustDedicated).
+    /// Start files (.bat / .sh that run RustDedicated) for its maps, unpacked next to them.
     start_files: Vec<PathBuf>,
+    /// Other start files (a procedural map's, or any when it holds no map): name and text.
+    scripts: Vec<(String, String)>,
 }
 
 /// Small files besides maps are taken along (bigger ones aren't settings or texts).
 const MAX_JSON: u64 = 4 * 1024 * 1024;
 const MAX_SCRIPT: u64 = 256 * 1024;
+/// A map bigger than this isn't one (the biggest real ones are a few hundred MB): a .zip that
+/// holds one is refused before anything is unpacked (a few MB of zip can unpack to many GB).
+const MAX_MAP: u64 = 2 * 1024 * 1024 * 1024;
+/// Room left on the drive after unpacking (the server files and settings live there too).
+const KEEP_FREE: u64 = 256 * 1024 * 1024;
 
 /// Where a .zip's files go: `Maps/<zip name>/`. A name Windows can't keep as a folder name (only
 /// dots, or ending in dots or spaces) is cleaned up first: "...zip" mustn't mean the folder above.
@@ -208,9 +222,39 @@ pub fn zip_folder(maps_dir: &Path, zip_path: &Path) -> PathBuf {
 }
 
 fn unzip_maps(zip_path: &Path, maps_dir: &Path) -> anyhow::Result<Unzipped> {
+    // (The drive's free space: the maps folder may not be there yet.)
+    let free = maps_dir.ancestors().find(|p| p.is_dir()).and_then(crate::platform::free_space);
+    unzip_within(zip_path, maps_dir, MAX_MAP, free)
+}
+
+fn unzip_within(zip_path: &Path, maps_dir: &Path, max_map: u64, free: Option<u64>) -> anyhow::Result<Unzipped> {
     let mut zip = zip::ZipArchive::new(File::open(zip_path)?)?;
+    // First what it would unpack, from the zip's own list (nothing unpacked yet): a map too big to
+    // be one, or more than the drive has room for, and nothing is.
+    let mut need = 0u64;
+    for i in 0..zip.len() {
+        let entry = zip.by_index_raw(i)?;
+        let Some(inner) = entry.enclosed_name() else { continue };
+        if entry.is_dir() {
+            continue;
+        }
+        let file = inner.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if is_map(&inner) {
+            if entry.size() > max_map {
+                anyhow::bail!(t!("maps.import.mapTooBig", file, size = size_text(entry.size()), limit = size_text(max_map)));
+            }
+            need += entry.size();
+        } else if has_ext(&inner, "json") && entry.size() <= MAX_JSON {
+            need += entry.size();
+        }
+    }
+    if let Some(free) = free.filter(|free| need.saturating_add(KEEP_FREE) > *free) {
+        anyhow::bail!(t!("maps.import.zipNoRoom", need = size_text(need), free = size_text(free)));
+    }
     let dest_dir = zip_folder(maps_dir, zip_path);
     let mut out = Unzipped::default();
+    // Start files: once it's known whether there are maps.
+    let mut scripts: Vec<(std::ffi::OsString, String)> = Vec::new();
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i)?;
         let Some(inner) = entry.enclosed_name() else { continue };
@@ -226,26 +270,53 @@ fn unzip_maps(zip_path: &Path, maps_dir: &Path) -> anyhow::Result<Unzipped> {
         if script {
             // Only a start file for a Rust server.
             let mut text = String::new();
-            if std::io::Read::read_to_string(&mut entry, &mut text).is_err() || !text.contains("RustDedicated") {
-                continue;
+            if std::io::Read::read_to_string(&mut entry, &mut text).is_ok() && text.contains("RustDedicated") {
+                scripts.push((file_name.to_os_string(), text));
             }
-            std::fs::create_dir_all(&dest_dir)?;
-            let dest = dest_dir.join(file_name);
-            std::fs::write(&dest, text)?;
-            out.start_files.push(dest);
             continue;
         }
         std::fs::create_dir_all(&dest_dir)?;
         let dest = dest_dir.join(file_name);
         let mut file = File::create(&dest)?;
-        std::io::copy(&mut entry, &mut file)?;
+        // No more than the zip says it holds (what was checked above).
+        let claimed = entry.size();
+        let copied = std::io::copy(&mut std::io::Read::take(&mut entry, claimed.saturating_add(1)), &mut file)?;
+        if copied > claimed {
+            drop(file);
+            let _ = std::fs::remove_file(&dest);
+            anyhow::bail!(t!("maps.import.zipLied", file = file_name.to_string_lossy()));
+        }
         if json {
             out.files.push(dest);
         } else {
             out.maps.push(dest);
         }
     }
+    // A map's start file goes next to it (its settings go into the map's start files); a
+    // procedural map's, or one in a .zip without maps, is kept like one dropped on DropLaunch.
+    for (file_name, text) in scripts {
+        if out.maps.is_empty() || startfile::makes_its_own_map(&text) {
+            if startfile::use_of(&text).is_some() {
+                out.scripts.push((file_name.to_string_lossy().into_owned(), text));
+            }
+            continue;
+        }
+        std::fs::create_dir_all(&dest_dir)?;
+        let dest = dest_dir.join(file_name);
+        std::fs::write(&dest, text)?;
+        out.start_files.push(dest);
+    }
     Ok(out)
+}
+
+/// A size as the import's messages show it.
+fn size_text(bytes: u64) -> String {
+    let mb = bytes as f64 / (1024.0 * 1024.0);
+    if mb >= 1024.0 {
+        format!("{:.1} GB", mb / 1024.0)
+    } else {
+        format!("{:.0} MB", mb.max(1.0))
+    }
 }
 
 #[cfg(test)]
@@ -300,7 +371,7 @@ mod tests {
         std::fs::write(maps.join("Race.map"), b"new").unwrap();
         std::fs::write(maps.join("Old").join("Race.map"), b"old").unwrap();
         let layout = startfile::Layout { base: &base, server_dir: &server, steamcmd_dir: &base.join("SteamCMD") };
-        startfile::ensure(&layout, &Target::Map(maps.join("Race.map")), false).unwrap();
+        startfile::ensure(&layout, &Target::Map(maps.join("Race.map")), false, None).unwrap();
         let found = scan(&maps, &StartFiles::read(&server));
         let race = found.iter().find(|m| m.folder.is_empty()).unwrap();
         assert!(race.start_file.is_some() && race.prefab_file.is_some(), "{race:?}");
@@ -328,11 +399,22 @@ mod tests {
             zip.write_all(b"RustDedicated.exe -batchmode +server.maxplayers 50").unwrap();
             zip.start_file("Cool Map v3/install.bat", opts).unwrap();
             zip.write_all(b"del *.*").unwrap();
+            zip.start_file("Cool Map v3/procgen.bat", opts).unwrap();
+            zip.write_all(b"RustDedicated.exe -batchmode +server.seed 5 +server.worldsize 3500").unwrap();
+            zip.finish().unwrap();
+        }
+        // Only a start file: kept like one dropped on DropLaunch.
+        let only = base.join("Only start.zip");
+        {
+            let mut zip = zip::ZipWriter::new(File::create(&only).unwrap());
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("start.bat", opts).unwrap();
+            zip.write_all(b"RustDedicated.exe +server.levelurl \"https://x/y.map\" +server.maxplayers 5").unwrap();
             zip.finish().unwrap();
         }
         let loose = base.join("loose.map");
         std::fs::write(&loose, b"m").unwrap();
-        let result = import(&[zip_path, loose.clone(), base.join("other.txt")], &maps);
+        let result = import(&[zip_path.clone(), loose.clone(), base.join("other.txt"), only.clone()], &maps);
         assert_eq!(result.maps.len(), 2, "{result:?}");
         assert!(maps.join("Cool Map v3").join("cool.map").is_file());
         assert_eq!(result.maps[1], loose.display().to_string());
@@ -340,7 +422,51 @@ mod tests {
         assert_eq!(result.files, vec![maps.join("Cool Map v3").join("Nederlands.json").display().to_string()]);
         assert_eq!(result.start_files, vec![maps.join("Cool Map v3").join("start_cool.bat").display().to_string()]);
         assert!(!maps.join("Cool Map v3").join("install.bat").exists() && !maps.join("Cool Map v3").join("readme.txt").exists());
-        assert_eq!(result.problems.len(), 1);
+        // A procedural map's start file isn't the map's: kept (not unpacked), like the only file of a zip.
+        let scripts: Vec<(&Path, &str)> = result.scripts.iter().map(|(zip, name, _)| (zip.as_path(), name.as_str())).collect();
+        assert_eq!(scripts, vec![(zip_path.as_path(), "procgen.bat"), (only.as_path(), "start.bat")]);
+        assert!(!maps.join("Cool Map v3").join("procgen.bat").exists());
+        assert_eq!(result.problems.len(), 1, "{result:?}");
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A map too big to be one, or a zip that needs more room than the drive has: nothing is
+    /// unpacked. One that unpacks to more than it says it holds is stopped there.
+    #[test]
+    fn zips_that_hold_too_much_are_refused() {
+        let base = temp_dir("bomb");
+        let maps = base.join("Maps");
+        let zip_path = base.join("pack.zip");
+        {
+            let mut zip = zip::ZipWriter::new(File::create(&zip_path).unwrap());
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("small.map", opts).unwrap();
+            zip.write_all(&[1; 100]).unwrap();
+            zip.start_file("big.map", opts).unwrap();
+            zip.write_all(&[0; 64 * 1024]).unwrap();
+            zip.finish().unwrap();
+        }
+        let refused = unzip_within(&zip_path, &maps, 32 * 1024, None).err().expect("refused").to_string();
+        assert!(refused.contains("big.map"), "{refused}");
+        assert!(!maps.exists(), "nothing unpacked");
+        let refused = unzip_within(&zip_path, &maps, MAX_MAP, Some(KEEP_FREE + 1000)).err().expect("refused").to_string();
+        assert!(refused.contains("free"), "{refused}");
+        assert!(!maps.exists(), "nothing unpacked");
+        assert_eq!(unzip_within(&zip_path, &maps, MAX_MAP, Some(KEEP_FREE + 100_000)).unwrap().maps.len(), 2);
+
+        // The zip's list says big.map holds 1000 bytes; it unpacks to 64 KB.
+        let mut bytes = std::fs::read(&zip_path).unwrap();
+        let central = bytes.windows(4).rposition(|w| w == b"PK\x01\x02").unwrap();
+        let name_at = bytes[central..].windows(7).position(|w| w == b"big.map").unwrap() + central;
+        assert_eq!(name_at - central, 46, "the name follows the central header");
+        bytes[central + 24..central + 28].copy_from_slice(&1000u32.to_le_bytes());
+        let lying = base.join("lying.zip");
+        std::fs::write(&lying, &bytes).unwrap();
+        let _ = std::fs::remove_dir_all(&maps);
+        let lied = unzip_within(&lying, &maps, MAX_MAP, None).err().expect("refused").to_string();
+        assert!(lied.contains("big.map"), "{lied}");
+        let unpacked = maps.join("lying").join("big.map");
+        assert!(!unpacked.exists() || std::fs::metadata(&unpacked).unwrap().len() <= 1000);
         let _ = std::fs::remove_dir_all(base);
     }
 }

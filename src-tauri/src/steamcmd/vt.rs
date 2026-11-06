@@ -157,7 +157,7 @@ impl LineAssembler {
 
     fn csi(&mut self, final_byte: char, done: &mut Vec<String>) {
         // Private modes (?25l cursor, ?9001h win32 input, ?1004h focus, ...) don't touch text.
-        if self.params.starts_with(|c: char| matches!(c, '?' | '>' | '=' | '<')) {
+        if self.params.starts_with(['?', '>', '=', '<']) {
             return;
         }
         let nums: Vec<Option<usize>> = self.params.split(';').map(|p| p.parse().ok()).collect();

@@ -1,9 +1,11 @@
 // Settings (the gear in the top bar): a page over the whole window that slides down from the top,
-// with a tab for each kind of setting (the language, servers, notifications, the guide), what was
-// dropped on DropLaunch (by kind, to pick from), Rent a server and About. Language files can be dropped on the window or the exe too; switching
-// languages reloads the window (servers and SteamCMD keep going).
+// with a tab for each kind of setting (the language, the theme, servers, notifications, the guide),
+// what was dropped on DropLaunch (by kind, to pick from), Rent a server and About. Language and
+// theme files can be dropped on the window or the exe too; switching languages reloads the window
+// (servers and SteamCMD keep going), switching themes doesn't.
 import { $, el, icon, invoke, toast, fmtWhen, confirmDialog, fitPath } from "./util.js";
 import { t, tn, language } from "./i18n.js";
+import { themes } from "./theme.js";
 import { rentPage } from "./rent.js";
 
 const ADDED_KEY = "droplaunch.languageAdded";
@@ -17,6 +19,7 @@ const TABS = [
   { id: "guide", icon: "bulb", tone: "yellow", title: "settings.guide", lead: "settings.guide.lead" },
   { id: "assets", icon: "upload", tone: "pink", title: "settings.assets", lead: "settings.assets.lead" },
   { id: "language", icon: "globe", tone: "violet", title: "settings.language", lead: "settings.language.lead" },
+  { id: "visuals", icon: "palette", tone: "mint", title: "settings.visuals", lead: "settings.visuals.lead" },
   { id: "rent", icon: "cloud", tone: "cyan", title: "rent.title", lead: "rent.lead", apart: true },
   { id: "about", icon: "info", tone: "blue", title: "settings.about", lead: "settings.about.lead" },
 ];
@@ -66,6 +69,7 @@ export function initSettings(ctx) {
   function build() {
     const b = {};
     b.languageTiles = el("div", { class: "lang-tiles", role: "radiogroup", "aria-label": t("settings.language.pick") });
+    b.themeTiles = el("div", { class: "theme-tiles", role: "radiogroup", "aria-label": t("settings.visuals.pick") });
     b.updateCheck = toggle(t("settings.updates"), t("settings.updates.note"), (on) => ctx.setOption({ updateCheck: on }));
     b.tips = toggle(t("settings.guide.tips"), t("settings.guide.tips.note"), (on) => ctx.guide.setOn(on));
     b.autoJoin = toggle(t("settings.autoJoin"), t("settings.autoJoin.note"), (on) => ctx.setOption({ autoJoin: on }));
@@ -96,6 +100,16 @@ export function initSettings(ctx) {
         card(
           action(t("settings.language.folder"), t("settings.language.folder.note"), "folder", openFolder),
           action(t("settings.language.export"), t("settings.language.export.note"), "download", exportEnglish),
+        ),
+      ],
+      visuals: [
+        group(t("settings.visuals.pick")),
+        b.themeTiles,
+        el("p", { class: "set-drop" }, icon("upload"), el("span", { text: t("settings.visuals.note") })),
+        group(t("settings.visuals.files")),
+        card(
+          action(t("settings.visuals.save"), t("settings.visuals.save.note"), "download", saveTheme),
+          action(t("settings.visuals.folder"), t("settings.visuals.folder.note"), "folder", openThemesFolder),
         ),
       ],
       servers: [
@@ -132,10 +146,10 @@ export function initSettings(ctx) {
         card(
           b.updateCheck.node,
           action(t("footer.licenses"), t("settings.licenses.note"), "arrow-right", () => ctx.about.open(), t("footer.licenses.title")),
-          // Where the settings file is, under its name.
+          // The data folder, under its name.
           el(
             "button",
-            { type: "button", class: "set-row set-action", title: t("settings.configFolder.title"), onclick: showConfig },
+            { type: "button", class: "set-row set-action", title: t("settings.configFolder.title"), onclick: openDataFolder },
             el("span", { class: "set-text" }, el("span", { class: "set-title", text: t("settings.configFolder") }), b.configNote),
             el("span", { class: "set-go" }, icon("folder")),
           ),
@@ -215,7 +229,8 @@ export function initSettings(ctx) {
     { id: "maps", icon: "map", title: t("settings.assets.maps"), empty: t("settings.assets.empty.maps") },
     { id: "zips", icon: "folder", title: t("settings.assets.zips"), empty: t("settings.assets.empty.zips") },
     { id: "languages", icon: "globe", title: t("settings.assets.languages"), empty: "" },
-    { id: "startFiles", icon: "file", title: t("settings.assets.startFiles"), empty: t("settings.assets.empty.startFiles") },
+    // (DropLaunch's own settings are always there.)
+    { id: "startFiles", icon: "file", title: t("settings.assets.startFiles"), empty: "" },
     { id: "kits", icon: "gift", title: t("settings.assets.kits"), empty: t("settings.assets.empty.kits") },
   ];
   const samePath = (a, b) => Boolean(a && b) && a.replaceAll("/", "\\").toLowerCase() === b.replaceAll("/", "\\").toLowerCase();
@@ -239,7 +254,169 @@ export function initSettings(ctx) {
     loadAssets();
   }
 
-  /** Each kind's rows: { key, title, sub, chosen, missing, choose, actions }. */
+  // ---------------------------------------------------------------- start files of yours
+  /** What a start file is for, as its tag says it. */
+  const useName = (usage) => t(usage === "procgen" ? "settings.assets.use.procgen" : "settings.assets.use.maps");
+
+  /** DropLaunch's start files for `usage` take the settings of `name` (null: DropLaunch's own). */
+  async function useStartFile(usage, name) {
+    try {
+      await invoke("start_file_use", { usage, name });
+    } catch (err) {
+      toast(String(err), "error");
+      return false;
+    }
+    await ctx.refresh();
+    ctx.maps?.render();
+    if (assets) loadAssets();
+    return true;
+  }
+
+  async function forgetStartFile(name) {
+    await invoke("start_file_forget", { name }).catch((err) => toast(String(err), "error"));
+    await ctx.refresh();
+    ctx.maps?.render();
+    loadAssets();
+  }
+
+  /** Start files dropped on the window or the exe: kept (see startFilesKept). */
+  async function addStartFiles(paths) {
+    let reply;
+    try {
+      reply = await invoke("start_files_add", { paths });
+    } catch (err) {
+      toast(String(err), "error");
+      return;
+    }
+    if (!reply.added.length) toast(reply.problems.join(" · "), "error");
+    else await startFilesKept(reply.added, reply.problems);
+  }
+
+  /** Start files DropLaunch kept (dropped on it, or in a .zip): a procedural map's is in the map
+   * list now (it starts there with all its settings); a custom map's settings are put to use if
+   * you like (every map keeps its own map). `problems`: files that weren't start files, said in
+   * the same note. */
+  async function startFilesKept(kept, problems = []) {
+    if (built && !page.hidden && current === "assets") loadAssets();
+    const procgen = kept.filter((f) => f.usage === "procgen");
+    const maps = kept.filter((f) => f.usage === "maps");
+    const notes = [...problems];
+    if (procgen.length) {
+      notes.unshift(tn("settings.assets.start.listed", procgen.length, { name: procgen[0].name }));
+      // The one chosen for the procedural map, dropped again: its new settings go in too.
+      const used = procgen.find((f) => f.inUse);
+      if (used) notes.push(t("settings.assets.start.updated", { name: used.name }));
+      await ctx.maps?.showPreset(procgen[0].name);
+    }
+    const f = maps.length === 1 ? maps[0] : null;
+    if (maps.length > 1) notes.push(tn("settings.assets.start.added", maps.length));
+    else if (f?.inUse) notes.push(t("settings.assets.start.updated", { name: f.name }));
+    if (notes.length) toast(notes.join(" · "), problems.length ? "error" : "ok");
+    if (!f || f.inUse) {
+      await ctx.refresh();
+      ctx.maps?.render();
+      return;
+    }
+    const use = await confirmDialog({
+      title: t("settings.assets.start.useTitle", { name: f.name }),
+      text: t("settings.assets.start.useMaps", { name: f.name }),
+      choices: [
+        { label: t("settings.assets.start.notNow"), value: false },
+        { label: t("settings.assets.start.use"), value: true, primary: true },
+      ],
+      cancel: false,
+    });
+    if (!use) toast(t("settings.assets.start.kept", { name: f.name }));
+    else if (await useStartFile(f.usage, f.name)) toast(t("settings.assets.start.usedMaps", { name: f.name }), "ok");
+  }
+
+  /** The Start files tab: DropLaunch's settings and the start files dropped on it, for the
+   * procedural map and for custom maps (one of each is in use), then the start files in the server
+   * folders. */
+  function startFileRows() {
+    const when = (secs, key) => (secs ? t(key, { when: fmtWhen(secs) }) : null);
+    const d = assets.startDefaults;
+    const value = (args, name) => args.find(([n]) => n === `server.${name}`)?.[1];
+    // What a row says about its server: the procedural map's seed and size (DropLaunch's: a start
+    // file chosen for it keeps them), players, port.
+    const facts = (usage, args = [], builtIn = false) => [
+      usage === "procgen" && builtIn ? t("maps.procgen.meta", { seed: d.seed, size: d.size }) : null,
+      t("settings.assets.start.players", { n: value(args, "maxplayers") ?? d.players }),
+      t("settings.assets.start.port", { port: value(args, "port") ?? d.port }),
+    ];
+    const chosenName = (usage) => (usage === "procgen" ? assets.chosenProcgen : assets.chosenMaps);
+    const same = (a, b) => Boolean(a && b) && a.toLowerCase() === b.toLowerCase();
+    const rows = [];
+    for (const usage of ["procgen", "maps"]) {
+      rows.push({
+        key: `droplaunch-${usage}`,
+        title: t("settings.assets.start.builtIn"),
+        builtIn: true,
+        tag: usage,
+        sub: facts(usage, [], true).filter(Boolean).join(" · "),
+        chosen: !chosenName(usage),
+        choose: () => useStartFile(usage, null),
+        actions: [],
+      });
+      for (const f of assets.droppedStartFiles.filter((x) => x.usage === usage)) {
+        rows.push({
+          key: f.path,
+          title: f.name,
+          tag: usage,
+          sub: [...facts(usage, f.args), when(f.added, "settings.assets.dropped")].filter(Boolean).join(" · "),
+          subTitle: [t("settings.assets.start.takes"), ...(f.args.length ? f.args.map(([n, v]) => `+${n} ${v}`) : [t("settings.assets.start.takesNothing")])].join("\n"),
+          chosen: same(chosenName(usage), f.name),
+          choose: () => useStartFile(usage, f.name),
+          actions: [
+            { icon: "folder", title: t("common.showExplorer"), run: () => reveal(f.path) },
+            { icon: "x", title: t("settings.assets.start.forget"), run: () => forgetStartFile(f.name) },
+          ],
+        });
+      }
+    }
+    // The start files in the server folders: files that differ only in their map (and its name)
+    // are one start file, a row per set of settings.
+    const groups = new Map();
+    for (const f of assets.startFiles) {
+      const key = `${f.own}|${f.settings.join("\n")}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(f);
+    }
+    if (groups.size) rows.push({ heading: t("settings.assets.start.serverFolders") });
+    for (const files of groups.values()) {
+      const f = files[0];
+      // A server setting's value ("port" -> "28015").
+      const arg = (name) => f.settings.find((a) => a.startsWith(`+server.${name} `))?.slice(name.length + 9);
+      const maps = [...new Set(files.map((x) => x.mapName))];
+      const kind = !f.own ? t("settings.assets.start.other") : f.prefab ? t("settings.assets.start.prefab") : !f.map ? t("settings.assets.start.procgen") : t("settings.assets.start.map");
+      const one = files.length === 1;
+      const start = one && f.map && (f.prefab || !ctx.maps?.has(f.map));
+      const branches = (ctx.state?.installs?.length ?? 0) > 1 ? [...new Set(files.map((x) => x.branch))] : [];
+      rows.push({
+        key: files.map((x) => x.path).join("|"),
+        title: kind,
+        sub: [
+          tn("settings.assets.start.maps", maps.length, { maps: maps.slice(0, 3).join(", ") + (maps.length > 3 ? ", …" : "") }),
+          arg("port") ? t("settings.assets.start.port", { port: arg("port") }) : null,
+          arg("maxplayers") ? t("settings.assets.start.players", { n: arg("maxplayers") }) : null,
+          branches.length ? branches.map((b) => t("settings.assets.branch", { branch: b })).join(", ") : null,
+          when(Math.max(...files.map((x) => x.modified)), "settings.assets.written"),
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        subTitle: [files.map((x) => x.name).join("\n"), "", ...f.settings].join("\n"),
+        // DropLaunch makes these: the ones above say with what settings.
+        choose: null,
+        actions: [
+          start ? { icon: "play", title: f.prefab ? t("maps.prefab.title", { name: f.mapName }) : t("settings.assets.start"), run: () => (close(), ctx.maps.start({ path: f.map, name: f.mapName }, { prefab: f.prefab })) } : null,
+          { icon: "folder", title: t("common.showExplorer"), run: () => reveal(f.path) },
+        ],
+      });
+    }
+    return rows;
+  }
+
+  /** Each kind's rows: { key, title, sub, chosen, missing, choose, actions } (or { heading }). */
   function assetRows(kind) {
     const when = (secs, key) => (secs ? t(key, { when: fmtWhen(secs) }) : null);
     const showBtn = (path) => ({ icon: "folder", title: t("common.showExplorer"), run: () => reveal(path) });
@@ -284,57 +461,8 @@ export function initSettings(ctx) {
           choose: () => switchTo(l.code),
           actions: [l.path ? showBtn(l.path) : null],
         }));
-      case "startFiles": {
-        const forMap = (f) => (f.map ? !sel?.procgen && samePath(sel?.path, f.map) : Boolean(sel?.procgen));
-        const branch = ctx.state?.branch;
-        const onBranch = (f) => !branch || !assets.startFiles.some((o) => o.branch === branch) || f.branch === branch;
-        // Only DropLaunch's normal file for a map is the one Start uses (the selected map's, on this
-        // branch); a prefab one or an older file of your own can be started or shown, not chosen.
-        const usable = (f) => f.own && !f.prefab;
-        const used = assets.startFiles.find((f) => usable(f) && forMap(f) && onBranch(f));
-        // Files that differ only in their map (and its name) are one start file: a row per set of
-        // settings.
-        const groups = new Map();
-        for (const f of assets.startFiles) {
-          const key = `${f.own}|${f.settings.join("\n")}`;
-          if (!groups.has(key)) groups.set(key, []);
-          groups.get(key).push(f);
-        }
-        return [...groups.values()].map((files) => {
-          const f = files[0];
-          // A server setting's value ("port" -> "28015").
-          const arg = (name) => f.settings.find((a) => a.startsWith(`+server.${name} `))?.slice(name.length + 9);
-          const maps = [...new Set(files.map((x) => x.mapName))];
-          const kind = !f.own ? t("settings.assets.start.other") : f.prefab ? t("settings.assets.start.prefab") : !f.map ? t("settings.assets.start.procgen") : t("settings.assets.start.map");
-          const one = files.length === 1;
-          const listed = !f.map || ctx.maps?.has(f.map);
-          const start = one && f.map && (f.prefab || !listed);
-          const branches = (ctx.state?.installs?.length ?? 0) > 1 ? [...new Set(files.map((x) => x.branch))] : [];
-          return {
-            key: files.map((x) => x.path).join("|"),
-            title: kind,
-            sub: [
-              tn("settings.assets.start.maps", maps.length, { maps: maps.slice(0, 3).join(", ") + (maps.length > 3 ? ", …" : "") }),
-              arg("port") ? t("settings.assets.start.port", { port: arg("port") }) : null,
-              arg("maxplayers") ? t("settings.assets.start.players", { n: arg("maxplayers") }) : null,
-              branches.length ? branches.map((b) => t("settings.assets.branch", { branch: b })).join(", ") : null,
-              when(Math.max(...files.map((x) => x.modified)), "settings.assets.written"),
-            ]
-              .filter(Boolean)
-              .join(" · "),
-            subTitle: [files.map((x) => x.name).join("\n"), "", ...f.settings].join("\n"),
-            // DropLaunch's own procedural map file.
-            builtIn: f.own && !f.map,
-            chosen: files.includes(used),
-            // One map's file, when the list shows that map.
-            choose: one && usable(f) && listed ? () => ctx.maps.select(f.map ?? "procgen") : null,
-            actions: [
-              start ? { icon: "play", title: f.prefab ? t("maps.prefab.title", { name: f.mapName }) : t("settings.assets.start"), run: () => (close(), ctx.maps.start({ path: f.map, name: f.mapName }, { prefab: f.prefab })) } : null,
-              showBtn(f.path),
-            ],
-          };
-        });
-      }
+      case "startFiles":
+        return startFileRows();
       case "kits":
         return assets.kits.map((k) => ({
           key: k.id,
@@ -359,7 +487,7 @@ export function initSettings(ctx) {
           { type: "button", role: "tab", class: "asset-kind", "aria-selected": String(k.id === assetKind), onclick: () => ((assetKind = k.id), renderAssets()) },
           icon(k.icon),
           el("span", { text: k.title }),
-          el("span", { class: "asset-kind-count", text: String(k.id === "startFiles" ? assetRows(k.id).length : assets[k.id].length) }),
+          el("span", { class: "asset-kind-count", text: String(k.id === "startFiles" ? assetRows(k.id).filter((r) => !r.heading).length : assets[k.id].length) }),
         ),
       ),
     );
@@ -368,7 +496,7 @@ export function initSettings(ctx) {
     built.assetList.replaceChildren(
       ...(rows.length
         ? rows.map((r) =>
-            el(
+            r.heading ? el("p", { class: "asset-head", text: r.heading }) : el(
               "div",
               {
                 class: `asset-row${r.chosen ? " chosen" : ""}${r.missing ? " missing" : ""}${r.choose ? "" : " fixed"}`,
@@ -384,7 +512,16 @@ export function initSettings(ctx) {
               el(
                 "span",
                 { class: "asset-text" },
-                el("span", { class: "asset-title" }, el("span", { text: r.title }), r.builtIn ? builtInTag() : null, r.chosen ? el("span", { class: "asset-badge", text: t("settings.language.inUse") }) : null, r.missing ? el("span", { class: "asset-badge bad", text: t("settings.assets.missing") }) : null),
+                el(
+                  "span",
+                  { class: "asset-title" },
+                  el("span", { text: r.title }),
+                  r.builtIn ? builtInTag() : null,
+                  // What a start file is for: the procedural map, or custom maps.
+                  r.tag ? el("span", { class: `use-tag ${r.tag}`, text: useName(r.tag) }) : null,
+                  r.chosen ? el("span", { class: "asset-badge", text: t("settings.language.inUse") }) : null,
+                  r.missing ? el("span", { class: "asset-badge bad", text: t("settings.assets.missing") }) : null,
+                ),
                 // A path ends the line, shortened in the middle when there's no room for all of it.
                 r.path
                   ? fitPath(el("span", { class: "asset-sub", title: [r.sub, r.path].filter(Boolean).join(" · ") }), r.path, { before: r.sub ? `${r.sub} · ` : "" })
@@ -429,6 +566,60 @@ export function initSettings(ctx) {
     );
   }
 
+  /** The built-in themes' names and what they're like, in the language in use. */
+  const THEME_TEXTS = {
+    default: [t("settings.visuals.default"), t("settings.visuals.default.note")],
+    light: [t("settings.visuals.light"), t("settings.visuals.light.note")],
+    grey: [t("settings.visuals.grey"), t("settings.visuals.grey.note")],
+    vibrant: [t("settings.visuals.vibrant"), t("settings.visuals.vibrant.note")],
+  };
+  const themeTexts = (theme) =>
+    (theme.source === "builtIn" && THEME_TEXTS[theme.id]) || [theme.name, t(theme.mode === "light" ? "settings.visuals.added.light" : "settings.visuals.added.dark")];
+
+  /** A little window in a theme's colours (they're #rrggbb(aa): checked by the backend). */
+  function themePreview(c) {
+    const paint = (color) => ({ style: `background:${color}` });
+    return el(
+      "span",
+      { class: "theme-preview", style: `background:${c.bg};border-color:${c["line-strong"]}`, "aria-hidden": "true" },
+      el("span", { class: "tp-side", ...paint(c["bg-deep"]) }, el("i", paint(c.accent)), el("i", paint(c.faint)), el("i", paint(c.faint))),
+      el(
+        "span",
+        { class: "tp-card", ...paint(c.card) },
+        el("i", { class: "tp-title", ...paint(c["text-strong"]) }),
+        el("i", { class: "tp-line", ...paint(c.muted) }),
+        el("span", { class: "tp-dots" }, el("i", paint(c.ok)), el("i", paint(c.warn)), el("i", paint(c.danger))),
+        el("i", { class: "tp-button", ...paint(c.accent) }),
+      ),
+    );
+  }
+
+  let themesKey = "";
+  function renderThemes() {
+    const key = JSON.stringify([themes.id, themes.list.map((th) => [th.id, th.name, th.colors])]);
+    if (key === themesKey) return;
+    themesKey = key;
+    built.themeTiles.replaceChildren(
+      ...themes.list.map((theme) => {
+        const on = theme.id === themes.id;
+        const [name, note] = themeTexts(theme);
+        return el(
+          "div",
+          { class: `theme-tile${on ? " on" : ""}` },
+          el(
+            "button",
+            { type: "button", class: "theme-pick", role: "radio", "aria-checked": String(on), onclick: () => pickTheme(theme.id) },
+            el("span", { class: "theme-shot" }, themePreview(theme.colors), on ? el("span", { class: "theme-check", title: t("settings.visuals.inUse") }, icon("check")) : null),
+            el("span", { class: "theme-text" }, el("span", { class: "theme-name", text: name }), el("span", { class: "theme-note", text: note })),
+          ),
+          theme.source === "added"
+            ? el("button", { type: "button", class: "icon-btn theme-remove", title: t("settings.visuals.remove"), "aria-label": t("settings.visuals.remove"), onclick: () => removeTheme(theme) }, icon("x"))
+            : null,
+        );
+      }),
+    );
+  }
+
   function renderSteps() {
     const steps = ctx.guide?.steps() ?? [];
     const done = steps.filter((s) => s.done).length;
@@ -444,6 +635,7 @@ export function initSettings(ctx) {
     const s = ctx.state;
     const b = built;
     renderLanguages();
+    renderThemes();
     if (!s) return;
     b.updateCheck.input.checked = s.updateCheck !== false;
     b.tips.input.checked = Boolean(s.guide?.on);
@@ -455,8 +647,8 @@ export function initSettings(ctx) {
     b.notifySaves.input.checked = s.notifySaves !== false;
     b.desktop.input.checked = s.desktopNotifications !== false;
     b.version.textContent = [t("about.version", { version: s.version }), t("about.madeBy")].join(" · ");
-    b.configNote.textContent = s.configFile;
-    b.configNote.title = s.configFile;
+    b.configNote.textContent = s.dataDir;
+    b.configNote.title = s.dataDir;
     renderSteps();
   }
 
@@ -596,9 +788,10 @@ export function initSettings(ctx) {
     built.tabs[current].focus({ preventScroll: true });
     try {
       languages = (await invoke("language_state")).languages;
+      await themes.reload();
       refresh();
     } catch {
-      /* the list from the start */
+      /* the lists from the start */
     }
   }
 
@@ -657,6 +850,70 @@ export function initSettings(ctx) {
     location.reload();
   }
 
+  // ---------------------------------------------------------------- themes
+  async function pickTheme(id) {
+    if (id === themes.id) return;
+    try {
+      await themes.use(id);
+    } catch (err) {
+      toast(String(err), "error");
+    }
+    if (built) renderThemes();
+  }
+
+  /** Theme files dropped on the window or the exe: added, and the last one is used (`use`; else
+   * they're only added). Gives back the files that aren't theme files. */
+  async function addThemes(paths, { use = true } = {}) {
+    let reply;
+    try {
+      reply = await invoke("add_themes", { paths });
+    } catch (err) {
+      toast(String(err), "error");
+      return [];
+    }
+    if (reply.problems.length) toast(reply.problems.join(" · "), "error");
+    const added = reply.added.at(-1);
+    if (added) {
+      try {
+        await themes.reload();
+        if (use) await themes.use(added.id);
+        toast(t(use ? "settings.visuals.added" : "settings.visuals.addedOnly", { name: added.name }), "ok");
+      } catch (err) {
+        toast(String(err), "error");
+      }
+      if (built) renderThemes();
+    }
+    return reply.rest;
+  }
+
+  async function removeTheme(theme) {
+    try {
+      await invoke("remove_theme", { id: theme.id });
+      await themes.reload();
+      toast(t("settings.visuals.removed", { name: theme.name }), "ok");
+    } catch (err) {
+      toast(String(err), "error");
+    }
+    renderThemes();
+  }
+
+  async function saveTheme() {
+    try {
+      const path = await invoke("save_theme", { id: themes.id });
+      if (path) toast(t("settings.visuals.saved", { path }), "ok");
+    } catch (err) {
+      toast(String(err), "error");
+    }
+  }
+
+  async function openThemesFolder() {
+    try {
+      await invoke("open_themes_folder");
+    } catch (err) {
+      toast(String(err), "error");
+    }
+  }
+
   async function openFolder() {
     try {
       await invoke("open_languages_folder");
@@ -681,8 +938,8 @@ export function initSettings(ctx) {
     toast(t("settings.guide.again"), "ok");
   }
 
-  function showConfig() {
-    if (ctx.state?.configFile) invoke("reveal", { path: ctx.state.configFile }).catch((err) => toast(String(err), "error"));
+  function openDataFolder() {
+    if (ctx.state?.dataDir) invoke("open_folder", { path: ctx.state.dataDir }).catch((err) => toast(String(err), "error"));
   }
 
   $("btn-settings").addEventListener("click", () => open());
@@ -711,5 +968,5 @@ export function initSettings(ctx) {
     /* no session storage: no note */
   }
 
-  return { open, close, addLanguages, render: () => built && !page.hidden && refresh() };
+  return { open, close, addLanguages, addThemes, addStartFiles, startFilesKept, render: () => built && !page.hidden && refresh() };
 }

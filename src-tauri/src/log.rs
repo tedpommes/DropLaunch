@@ -27,7 +27,7 @@ pub fn init(data: &Path) {
     }));
 }
 
-/// One line, with the date and time (UTC).
+/// One line, with the date and time (this PC's local time).
 pub fn write(text: &str) {
     #[cfg(debug_assertions)]
     eprintln!("{text}");
@@ -38,7 +38,7 @@ pub fn write(text: &str) {
     }
     let _ = path.parent().map(std::fs::create_dir_all);
     if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{} {text}", timestamp(crate::client::now_secs()));
+        let _ = writeln!(file, "{} {text}", timestamp(crate::client::local_secs()));
     }
 }
 

@@ -1,23 +1,30 @@
-//! Settings, kept in the user's app data (`%LOCALAPPDATA%\DropLaunch\settings.json`) so the
-//! DropLaunch folder holds nothing but the exe and what it downloads. Each folder DropLaunch runs
-//! from has its own entry there (paths inside it are stored relative to it); a DropLaunch that
-//! runs from a folder it never ran from starts like a new DropLaunch: default settings, the
-//! folders it finds next to itself, nothing from another folder (an exe sent to someone or
-//! copied elsewhere doesn't bring old settings along). Older versions kept `droplaunch.json` next to the exe: it's moved
-//! in once and removed.
+//! Settings, kept in the data folder next to the exe (`DropLaunch-data\settings.json`), with
+//! everything else DropLaunch keeps for itself: the folder moves along with it, and an exe sent to
+//! someone or copied elsewhere on its own starts like a new DropLaunch (default settings, the
+//! folders it finds next to itself). Paths inside the DropLaunch folder are stored relative to it.
+//! The file has an entry per folder: a data folder somewhere else (DROPLAUNCH_DATA, or the app
+//! data when the exe's folder can't be written to) is shared. Older versions kept the settings in
+//! the app data (moved in by `appdata`), and before that `droplaunch.json` next to the exe: it's
+//! moved in once and removed.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::owner::SteamUser;
+use crate::startfile::{self, Use};
 use crate::steamcmd::appinfo::{build_number, Branch};
 use crate::steamcmd::manifest::InstalledServer;
 use crate::steamcmd::{install, manifest};
 
-/// The settings file in the app data folder.
+/// The data folder next to the exe.
+pub const DATA_FOLDER: &str = "DropLaunch-data";
+/// The settings file in the data folder.
 pub const SETTINGS_FILE: &str = "settings.json";
+/// The window's own storage in the data folder (WebView2's user data: what the UI keeps in the
+/// browser storage, its cache).
+pub const WEBVIEW_DIR: &str = "WebView";
 /// Older versions: the settings next to the exe.
 pub const LEGACY_FILE: &str = "droplaunch.json";
 
@@ -75,8 +82,14 @@ pub struct Config {
     /// The language picked in Settings (its code). None: a language file next to the exe, else
     /// English.
     pub language: Option<String>,
+    /// The theme picked in Settings › Visuals (its id). None: Default.
+    pub theme: Option<String>,
     /// The guide for people new to hosting and map making.
     pub guide: Guide,
+    /// Start files dropped on DropLaunch whose settings its own take (their names in the data
+    /// folder's StartFiles; None: DropLaunch's own settings): for the procedural map, for custom maps.
+    pub procgen_start_file: Option<String>,
+    pub maps_start_file: Option<String>,
     /// Last time DropLaunch ran from this folder, seconds since 1970 (a moved or copied
     /// DropLaunch starts from the newest entry).
     pub last_used: i64,
@@ -90,11 +103,11 @@ pub struct Config {
 /// The settings file: one entry per folder DropLaunch ran from.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
-struct Settings {
-    version: u32,
+pub(crate) struct Settings {
+    pub version: u32,
     /// Folder (lowercase on Windows) -> its Config, kept as JSON so other folders' entries are
     /// written back as they were.
-    folders: BTreeMap<String, serde_json::Value>,
+    pub folders: BTreeMap<String, serde_json::Value>,
 }
 
 /// The guide: tips that explain a step when it comes up, and the Getting started checklist.
@@ -158,7 +171,10 @@ impl Default for Config {
             linked: true,
             legacy_drops: true,
             language: None,
+            theme: None,
             guide: Guide::default(),
+            procgen_start_file: None,
+            maps_start_file: None,
             last_used: 0,
             folder: String::new(),
             recent_maps: Vec::new(),
@@ -237,7 +253,7 @@ impl LoadError {
 pub struct ConfigStore {
     /// The folder DropLaunch runs from: relative paths start here.
     pub base: PathBuf,
-    /// DropLaunch's app data folder (settings, map pictures, bug reports).
+    /// DropLaunch's data folder (settings, map pictures, bug reports…).
     pub data: PathBuf,
     /// The settings file.
     pub file: PathBuf,
@@ -251,11 +267,19 @@ pub struct ConfigStore {
 
 impl ConfigStore {
     pub fn load() -> Self {
-        Self::load_from(base_dir(), data_dir())
+        let (base, data) = (base_dir(), data_dir());
+        // A dev build with its own data folder takes nothing from the app data.
+        if std::env::var_os("DROPLAUNCH_DATA").is_none() {
+            if let Some(old) = crate::appdata::dir().filter(|old| *old != data) {
+                crate::appdata::move_in(&base, &data, &old);
+            }
+        }
+        Self::load_from(base, data)
     }
 
-    fn load_from(base: PathBuf, data: PathBuf) -> Self {
+    pub(crate) fn load_from(base: PathBuf, data: PathBuf) -> Self {
         let file = data.join(SETTINGS_FILE);
+        remove_unfinished_saves(&data);
         let key = folder_key(&base);
         let mut load_error = None;
         // A byte order mark (an editor may add one) isn't JSON.
@@ -283,7 +307,21 @@ impl ConfigStore {
                 detect_layout(&base)
             }
         };
-        let mut config = match (folders.remove(&key), &legacy_text) {
+        // The data folder inside this one came along when the folder was moved or copied: its
+        // entry (the last one used, it holds only one) is this folder's, whatever it was saved as.
+        let own = data.starts_with(&base);
+        let entry = match folders.remove(&key) {
+            Some(entry) => Some(entry),
+            None if own => {
+                let newest = folders.iter().max_by_key(|(_, entry)| entry.get("lastUsed").and_then(serde_json::Value::as_i64));
+                newest.map(|(folder, _)| folder.clone()).and_then(|folder| folders.remove(&folder))
+            }
+            None => None,
+        };
+        if own {
+            folders.clear();
+        }
+        let mut config = match (entry, &legacy_text) {
             (Some(entry), _) => parse(entry, false, &mut load_error),
             (None, Some(text)) => match serde_json::from_str::<serde_json::Value>(text) {
                 Ok(value) => parse(value, true, &mut load_error),
@@ -314,13 +352,18 @@ impl ConfigStore {
         store
     }
 
+    /// Saved through `settings.json.<process id>.tmp`, renamed when complete (see
+    /// `remove_unfinished_saves`).
     pub fn save(&self) -> anyhow::Result<()> {
         let mut folders = self.others.clone();
         folders.insert(self.key.clone(), serde_json::to_value(&self.config)?);
         std::fs::create_dir_all(&self.data)?;
-        let tmp = self.file.with_extension("json.tmp");
+        // A name of its own: two DropLaunches saving at once can't swap halves.
+        let tmp = self.file.with_extension(format!("json.{}.tmp", std::process::id()));
         std::fs::write(&tmp, serde_json::to_string_pretty(&Settings { version: 1, folders })?)?;
-        std::fs::rename(&tmp, &self.file)?;
+        std::fs::rename(&tmp, &self.file).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })?;
         Ok(())
     }
 
@@ -450,6 +493,15 @@ impl ConfigStore {
         self.resolve(&self.config.maps_dir)
     }
 
+    /// The start file of yours chosen for `usage` (None: DropLaunch's own settings).
+    pub fn chosen_start_file(&self, usage: Use) -> Option<PathBuf> {
+        let name = match usage {
+            Use::Procgen => self.config.procgen_start_file.as_ref(),
+            Use::Maps => self.config.maps_start_file.as_ref(),
+        }?;
+        Some(startfile::dropped_copy(&self.data, name))
+    }
+
     /// Put a map that was just started at the top of the history.
     pub fn remember_map(&mut self, path: &Path) {
         let text = path.display().to_string();
@@ -502,7 +554,7 @@ fn branch_folder(main: &Path, branch: &str) -> PathBuf {
 
 /// A settings entry's folder is there, or might be again: its drive (or network share) isn't
 /// available right now.
-fn still_there(folder: &Path) -> bool {
+pub(crate) fn still_there(folder: &Path) -> bool {
     folder.is_dir() || folder.ancestors().last().is_some_and(|root| !root.is_dir())
 }
 
@@ -520,7 +572,7 @@ fn now() -> i64 {
 }
 
 /// A folder's entry in the settings file (Windows paths don't care about case).
-fn folder_key(base: &Path) -> String {
+pub(crate) fn folder_key(base: &Path) -> String {
     let text = base.to_string_lossy().trim_end_matches(['\\', '/']).to_string();
     if cfg!(windows) {
         text.to_lowercase()
@@ -529,22 +581,43 @@ fn folder_key(base: &Path) -> String {
     }
 }
 
-/// DropLaunch's app data: DROPLAUNCH_DATA, else DROPLAUNCH_HOME (a dev build keeps everything
-/// in its own folder), else the user's app data folder.
+/// What saves left behind when DropLaunch was ended between writing `settings.json.<process
+/// id>.tmp` and renaming it (Task Manager, a crash, the power going off): each would stay in the
+/// data folder for good. Only those older than a minute, so the save of a DropLaunch that runs
+/// right now isn't touched.
+fn remove_unfinished_saves(data: &Path) {
+    let Ok(entries) = std::fs::read_dir(data) else { return };
+    let prefix = format!("{SETTINGS_FILE}.");
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name.to_str().and_then(|n| n.strip_prefix(&prefix)).and_then(|n| n.strip_suffix(".tmp")) else { continue };
+        if pid.is_empty() || !pid.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let age = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok());
+        if age.is_some_and(|age| age > Duration::from_secs(60)) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// DropLaunch's data folder: DROPLAUNCH_DATA, else `DropLaunch-data` next to the exe (or in
+/// DROPLAUNCH_HOME), else (a folder it can't write in, like Program Files) the user's app data.
 pub fn data_dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("DROPLAUNCH_DATA").or_else(|| std::env::var_os("DROPLAUNCH_HOME")) {
+    if let Some(dir) = std::env::var_os("DROPLAUNCH_DATA") {
         return PathBuf::from(dir);
     }
-    let home = || std::env::var_os("HOME").map(PathBuf::from);
-    let dir = if cfg!(windows) {
-        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("DropLaunch"))
-    } else if cfg!(target_os = "macos") {
-        home().map(|h| h.join("Library").join("Application Support").join("DropLaunch"))
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| home().map(|h| h.join(".config"))).map(|d| d.join("droplaunch"))
-    };
-    // Nowhere else to go: next to the exe, like older versions.
-    dir.unwrap_or_else(base_dir)
+    let own = base_dir().join(DATA_FOLDER);
+    if writable(&own) {
+        return own;
+    }
+    crate::appdata::dir().unwrap_or(own)
+}
+
+/// The folder is there (made if it wasn't) and takes files.
+fn writable(dir: &Path) -> bool {
+    let probe = dir.join(".write-test");
+    std::fs::create_dir_all(dir).is_ok() && std::fs::write(&probe, b"").is_ok() && std::fs::remove_file(&probe).is_ok()
 }
 
 /// DropLaunch's home: the exe's folder, or DROPLAUNCH_HOME (handy while developing).
@@ -589,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn old_settings_next_to_the_exe_move_into_the_app_data() {
+    fn old_settings_next_to_the_exe_move_into_the_data_folder() {
         let base = temp_dir("legacy");
         let data = temp_dir("legacy-data");
         // With a byte order mark, as some editors save it.
@@ -598,7 +671,7 @@ mod tests {
         assert_eq!(store.config.branch, "staging");
         assert!(!base.join(super::LEGACY_FILE).exists(), "the old file is gone");
         assert!(data.join(super::SETTINGS_FILE).is_file());
-        // Read back from the app data next time.
+        // Read back from the data folder next time.
         let again = super::ConfigStore::load_from(base.clone(), data.clone());
         assert_eq!(again.config.skipped_update.as_deref(), Some("2.0.1"));
         let _ = fs::remove_dir_all(base);
@@ -712,6 +785,32 @@ mod tests {
         let config = detect_layout(&base);
         assert_eq!(config.steamcmd_dir, ".");
         assert_eq!(PathBuf::from(&config.server_dir), PathBuf::from("steamapps").join("common").join("rust_dedicated"));
+        let _ = fs::remove_dir_all(base);
+    }
+
+    /// A save that never got renamed (DropLaunch ended halfway) is removed at the next start; one
+    /// from a minute ago or less, and files of other names, stay.
+    #[test]
+    fn unfinished_saves_are_removed_at_start() {
+        use std::time::{Duration, SystemTime};
+        let base = temp_dir("unfinished");
+        let data = base.join("DropLaunch-data");
+        fs::create_dir_all(&data).unwrap();
+        let old = data.join("settings.json.4242.tmp");
+        fs::write(&old, "{").unwrap();
+        fs::File::options().write(true).open(&old).unwrap().set_modified(SystemTime::now() - Duration::from_secs(120)).unwrap();
+        let keep = ["settings.json.4343.tmp", "settings.json.tmp", "settings.json.abc.tmp", "settings.json.bad"];
+        for name in keep {
+            fs::write(data.join(name), "{").unwrap();
+        }
+        let older = data.join("settings.json.abc.tmp");
+        fs::File::options().write(true).open(&older).unwrap().set_modified(SystemTime::now() - Duration::from_secs(120)).unwrap();
+        super::ConfigStore::load_from(base.clone(), data.clone());
+        assert!(!old.exists(), "the old unfinished save is gone");
+        for name in keep {
+            assert!(data.join(name).exists(), "{name} stays");
+        }
+        assert!(data.join(super::SETTINGS_FILE).is_file());
         let _ = fs::remove_dir_all(base);
     }
 

@@ -282,7 +282,7 @@ fn cached_maps(dir: &Path) -> Vec<(PathBuf, u64)> {
         .filter_map(|e| {
             let path = e.path();
             let meta = e.metadata().ok()?;
-            (meta.is_file() && path.extension().is_some_and(|x| x.eq_ignore_ascii_case("map"))).then(|| (path, meta.len()))
+            (meta.is_file() && path.extension().is_some_and(|x| x.eq_ignore_ascii_case("map"))).then_some((path, meta.len()))
         })
         .collect()
 }
@@ -298,12 +298,20 @@ pub fn now_secs() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }
 
-/// Today's date as `2026-10-19` (UTC), for the backup folder's name.
-pub fn today() -> String {
-    date(now_secs())
+/// Now, as seconds since 1970 on this PC's local clock (its time zone and summer time added):
+/// for the dates and times people read.
+pub fn local_secs() -> i64 {
+    let now = now_secs();
+    now + crate::platform::utc_offset_secs(now)
 }
 
-/// The date (UTC) of a moment in seconds since 1970, as `2026-10-19`.
+/// Today's date as `2026-10-19` (this PC's local date), for the backup folder's name.
+pub fn today() -> String {
+    date(local_secs())
+}
+
+/// The date of a moment in seconds since 1970, as `2026-10-19` (no time zone added: pass
+/// `local_secs()` for the local date).
 pub fn date(secs: i64) -> String {
     // Days since 1970 to a date (Howard Hinnant's civil_from_days).
     let z = secs.div_euclid(86_400) + 719_468;
@@ -339,9 +347,9 @@ fn back_up(path: &Path, backups: &Path) -> std::io::Result<()> {
 }
 
 /// The days' folders in `backups` older than BACKUP_DAYS go (only folders named like a date:
-/// anything else in there was put there by someone else).
-fn prune_backups(backups: &Path) {
-    let oldest = date(now_secs() - BACKUP_DAYS * 86_400);
+/// anything else in there was put there by someone else). Also run once at start.
+pub fn prune_backups(backups: &Path) {
+    let oldest = date(local_secs() - BACKUP_DAYS * 86_400);
     let Ok(entries) = std::fs::read_dir(backups) else { return };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -412,6 +420,15 @@ mod tests {
         assert_eq!(Game::for_branch("staging"), (Game::Staging, None));
         assert_eq!(Game::for_branch("aux02"), (Game::Staging, None));
         assert_eq!(Game::Staging.run_url(28015), "steam://run/700580//+connect%20127.0.0.1:28015/");
+    }
+
+    /// Local time is UTC plus a time zone: whole quarter hours, at most 14 hours away.
+    #[test]
+    fn local_time_is_a_time_zone_away() {
+        let offset = local_secs() - now_secs();
+        assert!(offset.abs() <= 14 * 3600 + 1 && (offset + 1).rem_euclid(900) <= 2, "{offset}");
+        assert_eq!(date(1_790_812_800 - 1), "2026-09-30");
+        assert_eq!(date(1_790_812_800), "2026-10-01");
     }
 
     /// What's installed and running on this PC (reads Steam's files and the process list only).

@@ -1,6 +1,6 @@
 // The server console's command line: suggestions from the server's own command list (read from
 // the installed server, so they match its build and mods) and a history kept between sessions
-// (console-history.txt in DropLaunch's app data).
+// (console-history.txt in DropLaunch's data folder).
 //
 // Keys: Tab takes the highlighted (or first) suggestion, ↑/↓ move through the suggestions while
 // they show and through the history otherwise, Enter sends (or takes a suggestion picked with

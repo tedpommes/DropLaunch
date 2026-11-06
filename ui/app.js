@@ -1,7 +1,8 @@
 // DropLaunch v2 UI. Talks to the Rust side through Tauri's invoke(), Channel streams and events.
+import "./theme.js";
 import { $, el, icon, pathChip, invoke, Channel, fmtBytes, fmtDate, fmtAgo, fmtDuration, fileName, buildNum, toast, confirmDialog, copyText, Rate, followScroll, sizeTag, fitPath, driveOf } from "./util.js";
 import { Dropdown } from "./dropdown.js";
-import { initMaps } from "./maps.js";
+import { initMaps, isStartFile } from "./maps.js";
 import { initServer } from "./server.js";
 import { initLayout } from "./layout.js";
 import { initGame } from "./game.js";
@@ -588,15 +589,18 @@ function renderMods() {
   $("mods-profiler").checked = Boolean(state.profiler);
 
   const rows = [];
-  const scriptRow = (name, note, path) =>
+  const scriptRow = (name, note, path, title = null) =>
     el(
       "div",
-      { class: "script-row" },
+      { class: "script-row", title },
       icon("file"),
       el("div", { class: "script-text" }, el("b", { text: name }), el("span", { text: note })),
       path ? el("button", { class: "icon-btn", title: t("common.showExplorer"), onclick: () => invoke("reveal", { path }).catch((e) => toast(String(e))) }, icon("folder")) : null,
     );
-  if (state.updateScript) rows.push(scriptRow(fileName(state.updateScript), t("mods.script.update", { branch: state.server?.branch ?? state.branch }), state.updateScript));
+  if (state.steamcmdUpdateScript)
+    rows.push(scriptRow(fileName(state.steamcmdUpdateScript), t("mods.script.updateAll"), state.steamcmdUpdateScript, t("mods.script.updateAll.title")));
+  if (state.updateScript)
+    rows.push(scriptRow(fileName(state.updateScript), t("mods.script.update", { branch: state.server?.branch ?? state.branch }), state.updateScript, t("mods.script.update.title")));
   if (state.startFile) rows.push(scriptRow(fileName(state.startFile), t("mods.script.procgen"), state.startFile));
   // Two per map (normal + prefab test mode): count the maps.
   const mapFiles = state.startFiles.filter((f) => f.map);
@@ -891,7 +895,7 @@ async function openSetup(pendingMap = null, { auto = false, branch = null } = {}
   if (setupState.startMap) startLabel.replaceChildren(...rich("setup.start.map", { map: setupState.startMap.name }));
   else startLabel.textContent = t("setup.start");
   renderFrameworkPicker();
-  const accounts = renderOwner();
+  renderOwner();
 
   showSetupView("options");
   $("setup").hidden = false;
@@ -899,7 +903,6 @@ async function openSetup(pendingMap = null, { auto = false, branch = null } = {}
   $("setup-fix").focus();
   if (auto) {
     // A map was dropped on a fresh install: no questions, the options stay open while it downloads.
-    await accounts;
     runSetup();
   }
 }
@@ -1013,8 +1016,15 @@ async function pickSetupFolder(f) {
   }
 }
 
+/**
+ * A setup that finished with Continue when done unticked waits here: its steps stay in view until
+ * Next (or the window is closed), then it says how it went.
+ */
+let setupNext = null;
+
 /** Also while it runs: it carries on in the background (the Maps page shows how far it is). */
 function closeSetup() {
+  setupNext?.();
   stopCountdown();
   $("setup").hidden = true;
   applyBusy();
@@ -1060,7 +1070,6 @@ function renderOwner() {
   $("setup-owner-id").value = "";
   $("setup-owner-id").classList.remove("bad");
   ownerChanged();
-  return Promise.resolve();
 }
 
 async function detectAccounts() {
@@ -1223,11 +1232,13 @@ function renderWhitelistOption() {
   $("setup-whitelist-row").hidden = !owner;
 }
 
-/** options -> running -> result. While SteamCMD downloads ("live"), the options stay open. Step 1
- * shows the downloads first, then how far setting up is. */
+/** options -> running -> (done) -> result. While SteamCMD downloads ("live"), the options stay
+ * open. Step 1 shows the downloads first, then how far setting up is. "done": finished with
+ * Continue when done unticked, the steps stay in view and Cancel is Next. */
 function showSetupView(view) {
-  const running = view === "running";
-  const live = running && setupState.live;
+  const done = view === "done";
+  const running = view === "running" || done;
+  const live = view === "running" && setupState.live;
   $("setup-step-download").textContent = view === "options" ? t("setup.step.download") : t("setup.step.running");
   $("setup-reqs").hidden = view !== "options";
   $("setup-options").hidden = !(view === "options" || live);
@@ -1239,8 +1250,10 @@ function showSetupView(view) {
   // While it runs it can be hidden: a server from another branch can be used meanwhile.
   if (running) $("setup-later").textContent = t("setup.hide");
   $("setup-later").title = running ? t("setup.hide.title") : "";
-  $("setup-cancel").hidden = !running;
-  $("setup-auto-row").hidden = !running;
+  $("setup-later").hidden = done;
+  $("setup-cancel").hidden = !running || done;
+  $("setup-auto-row").hidden = !running || done;
+  $("setup-next").hidden = !done;
   $("setup-fix").hidden = running;
   $("setup-close").hidden = true;
   $("setup-actions").classList.remove("centered");
@@ -1358,7 +1371,7 @@ async function runSetup() {
         ? t("setup.lead.runningMap", { map })
         : t("setup.lead.running");
   setupState.running = true;
-  // Unticked: once it's done the window waits for Continue.
+  // Unticked: once it's done the window waits for Next.
   $("setup-auto").checked = false;
   // Something to download: the options stay open meanwhile.
   setupState.live = !(state.steamcmdFound ?? state.steamcmdInstalled) || !serverHere;
@@ -1390,15 +1403,16 @@ async function runSetup() {
   ctx.maps.reload();
   // It ran in the background: say how it went on the Maps page.
   const background = $("setup").hidden;
-  if (background) {
-    const added = setupState.adding && summary.ok ? t("setup.added", { branch: options.branch }) : null;
-    showStripResult({
-      icon: summary.ok ? "check" : summary.cancelled ? "x" : "alert",
-      title: summary.ok ? summary.title : summary.cancelled ? t("setup.cancelled") : t("setup.failed"),
-      detail: added ?? summary.detail,
-      kind: summary.ok ? "done" : summary.cancelled ? "" : "warn",
-    });
-    if (added) toast(added, "ok");
+  if (background) stripSetupResult(summary, options);
+  // Continue when done unticked: the finished steps stay in view, and Next shows how it went.
+  if (summary.ok && !background && !$("setup-auto").checked) {
+    $("setup-lead").textContent = t("setup.lead.done");
+    showSetupView("done");
+    $("setup-next").focus();
+    await new Promise((resolve) => (setupNext = resolve));
+    setupNext = null;
+    // Closed instead (Esc): the Maps page says how it went.
+    if ($("setup").hidden) stripSetupResult(summary, options);
   }
 
   $("setup-lead").textContent = summary.ok ? t("setup.lead.done") : summary.cancelled ? t("setup.lead.stopped") : t("setup.lead.failed");
@@ -1421,6 +1435,18 @@ async function runSetup() {
     $("setup-actions").classList.add("centered");
     if ($("setup-auto").checked) startCountdown();
   }
+}
+
+/** How a setup went, on the Maps page (it ran with its window closed). */
+function stripSetupResult(summary, options) {
+  const added = setupState.adding && summary.ok ? t("setup.added", { branch: options.branch }) : null;
+  showStripResult({
+    icon: summary.ok ? "check" : summary.cancelled ? "x" : "alert",
+    title: summary.ok ? summary.title : summary.cancelled ? t("setup.cancelled") : t("setup.failed"),
+    detail: added ?? summary.detail,
+    kind: summary.ok ? "done" : summary.cancelled ? "" : "warn",
+  });
+  if (added) toast(added, "ok");
 }
 
 // ---------------------------------------------------------------- folders
@@ -1645,6 +1671,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("welcome").hidden && $("modal").hidden) askSkipWelcome();
 });
 $("setup-close").addEventListener("click", closeSetup);
+$("setup-next").addEventListener("click", () => setupNext?.());
 // An option's (i) sits in its label: a click there shows what it does, it doesn't switch it.
 $("setup").addEventListener("click", (e) => {
   if (e.target.closest(".opt-info") && !e.target.closest("a")) e.preventDefault();
@@ -1660,6 +1687,7 @@ document.addEventListener("keydown", (e) => {
 // Things change outside DropLaunch too (update_server.bat, files copied in): look again on focus.
 window.addEventListener("focus", () => {
   if (!busy && state) refresh();
+  ctx.kits?.reload();
 });
 
 /** A small screen: the window opens no bigger than the screen's free area (and centred on it). */
@@ -1709,8 +1737,13 @@ refresh().then(async () => {
   ctx.updates.start();
   render();
   if (state.setupNeeded) {
+    // Opened with a start file: it's added (a procedural map's to the list, a custom map's
+    // settings put to use if you like).
+    const scripts = files.filter(isStartFile);
+    if (scripts.length) ctx.settings.addStartFiles(scripts);
     // Opened with a map on a fresh install: set everything up and start it, no questions.
-    const map = files.length ? await firstMap(files) : null;
+    const maps = files.filter((f) => !isStartFile(f));
+    const map = maps.length ? await firstMap(maps) : null;
     // Until setup is done (the first start, or it was skipped or didn't finish): what DropLaunch
     // does, before the setup window.
     if (!map) {

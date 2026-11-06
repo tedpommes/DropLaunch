@@ -1,3 +1,4 @@
+pub mod appdata;
 pub mod archive;
 pub mod assets;
 pub mod client;
@@ -18,6 +19,7 @@ pub mod server;
 pub mod startfile;
 pub mod steamcmd;
 pub mod sync;
+pub mod theme;
 pub mod toast;
 pub mod updater;
 pub mod watcher;
@@ -26,8 +28,8 @@ pub mod whitelist;
 use std::path::{Path, PathBuf};
 use tauri::{Emitter, Manager};
 
-/// Command-line arguments that are maps to open (a .map/.zip/folder dropped on the exe), or
-/// language files (.json) to add.
+/// Command-line arguments that are maps to open (a .map/.zip/folder dropped on the exe), language,
+/// theme or kit files (.json), or start files (.bat/.cmd/.sh) to add.
 fn openable(args: &[String], cwd: &Path) -> Vec<String> {
     args.iter()
         .filter(|a| !a.starts_with('-'))
@@ -40,7 +42,7 @@ fn openable(args: &[String], cwd: &Path) -> Vec<String> {
             }
         })
         .filter(|p| {
-            p.is_dir() || p.extension().is_some_and(|e| ["map", "zip", "json"].iter().any(|x| e.eq_ignore_ascii_case(x)))
+            p.is_dir() || startfile::is_script(p) || p.extension().is_some_and(|e| ["map", "zip", "json"].iter().any(|x| e.eq_ignore_ascii_case(x)))
         })
         .map(|p| p.display().to_string())
         .collect()
@@ -72,14 +74,29 @@ pub fn run() {
     }
     builder
         .plugin(tauri_plugin_dialog::init())
-        .manage(commands::AppState::load(files))
-        .setup(|app| {
+        .setup(move |app| {
+            // Loaded here, after the plugins: a second launch has already been handed to the
+            // DropLaunch that runs (and has exited) before it reads or writes anything.
+            app.manage(commands::AppState::load(files));
             let state = app.state::<commands::AppState>();
-            state.ensure_scripts();
+            // Made here, not from tauri.conf.json: its storage (WebView2's) goes into the data folder.
+            let config = app.config().app.windows.iter().find(|w| w.label == "main").ok_or("no main window in tauri.conf.json")?;
+            let window = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?.data_directory(state.webview_dir()).build()?;
+            state.dress_window(&window);
+            state.write_update_scripts();
             state.server.run(app.handle().clone());
             state.playtest.run(app.handle().clone());
             state.watcher.run(app.handle().clone());
             state.watcher.watch(state.maps_dir());
+            // Up and running: the version before an update isn't needed any more.
+            updater::remove_leftovers();
+            // Once, in the background: map backups past their days (otherwise only pruned when
+            // another map is backed up) and map pictures not shown for a month.
+            let data = state.data_dir();
+            let _ = std::thread::Builder::new().name("housekeeping".into()).spawn(move || {
+                client::prune_backups(&data.join(client::BACKUP_DIR));
+                playtest::mapview::prune_thumbnails(&data.join(playtest::mapview::CACHE_DIR));
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -130,6 +147,9 @@ pub fn run() {
             commands::bug_reports_clear,
             commands::assets_list,
             commands::assets_forget,
+            commands::start_files_add,
+            commands::start_file_use,
+            commands::start_file_forget,
             commands::server_ask,
             commands::set_owner,
             commands::update_setup_options,
@@ -155,13 +175,20 @@ pub fn run() {
             commands::add_languages,
             commands::open_languages_folder,
             commands::export_language,
+            commands::theme_state,
+            commands::set_theme,
+            commands::add_themes,
+            commands::remove_theme,
+            commands::open_themes_folder,
+            commands::save_theme,
         ])
         .build(tauri::generate_context!())
         .expect("error while building DropLaunch")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
-                let state = app.state::<commands::AppState>();
-                state.server.shutdown();
+                if let Some(state) = app.try_state::<commands::AppState>() {
+                    state.server.shutdown();
+                }
             }
         });
 }

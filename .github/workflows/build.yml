@@ -24,7 +24,7 @@ jobs:
 
       - name: Rust
         run: |
-          rustup toolchain install stable --profile minimal
+          rustup toolchain install stable --profile minimal --component clippy
           rustup default stable
 
       - uses: actions/cache@v6
@@ -38,6 +38,10 @@ jobs:
 
       - name: Test
         run: cargo test --locked
+
+      # Warnings show in the log without failing the run; a clippy error (a deny lint) fails it.
+      - name: Clippy
+        run: cargo clippy --locked --all-targets
 
       - name: Build
         run: |

@@ -5,6 +5,7 @@ import { $, el, icon, invoke, toast, confirmDialog, desktopNotify, onNotificatio
 import { MapCanvas, readPicture, reportPin } from "./mapcanvas.js";
 import { contextMenu } from "./menu.js";
 import { t, tn, language } from "./i18n.js";
+import { color } from "./theme.js";
 
 const TRAIL_MAX = 20000;
 const COMPASS = [
@@ -164,7 +165,7 @@ export function initPlaytest(ctx) {
     }
     if (landed && landed.until > Date.now()) {
       const [sx, sy] = map.toScreen(landed.x, landed.z);
-      g.strokeStyle = "#7a95e3";
+      g.strokeStyle = color("--accent");
       g.lineWidth = 2.5;
       for (const radius of [7, 14]) {
         g.beginPath();
@@ -380,7 +381,7 @@ export function initPlaytest(ctx) {
   }
 
   function renderHead() {
-    $("pt-title").textContent = (view?.server?.procgen ? t("maps.procgen.name") : view?.server?.title) ?? mapTitle() ?? t("playtest.title");
+    $("pt-title").textContent = (view?.server?.procgen && !view.server.preset ? t("maps.procgen.name") : view?.server?.title) ?? mapTitle() ?? t("playtest.title");
     const chips = [];
     if (view?.map) {
       const text = view.map.procgen

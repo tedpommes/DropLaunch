@@ -173,9 +173,10 @@ export function initKits(ctx) {
     catalog = new Map(list.map((i) => [i.s, i]));
   }
 
-  async function saveKits(next) {
+  /** Kits that are new or changed, and the ids of deleted ones (the files of other kits stay). */
+  async function saveKits(changed, removed = []) {
     try {
-      kits = await invoke("kits_save", { kits: next });
+      kits = await invoke("kits_save", { kits: changed, removed });
       return true;
     } catch (err) {
       toast(String(err), "error");
@@ -316,7 +317,7 @@ export function initKits(ctx) {
       if (done) return;
       done = true;
       const value = input.value.trim();
-      if (keep && value && value !== kit.name && (await saveKits(kits.map((k) => (k.id === kit.id ? { ...k, name: value } : k))))) selected = kit.id;
+      if (keep && value && value !== kit.name && (await saveKits([{ ...(kits.find((k) => k.id === kit.id) ?? kit), name: value }]))) selected = kit.id;
       renaming = false;
       render(true);
     };
@@ -514,7 +515,7 @@ export function initKits(ctx) {
 
   async function duplicate(kit) {
     const copy = { ...structuredClone(kit), id: crypto.randomUUID(), name: t("kits.copyName", { name: kit.name }) };
-    if (await saveKits([...kits, copy])) {
+    if (await saveKits([copy])) {
       selected = copy.id;
       render(true);
     }
@@ -523,7 +524,7 @@ export function initKits(ctx) {
   async function remove(kit) {
     const ok = await confirmDialog({ title: t("kits.delete.title", { name: kit.name }), text: t("kits.delete.text"), ok: t("kits.delete") });
     if (!ok) return;
-    if (await saveKits(kits.filter((k) => k.id !== kit.id))) {
+    if (await saveKits([], [kit.id])) {
       selected = null;
       render(true);
     }
@@ -903,8 +904,7 @@ export function initKits(ctx) {
   async function save() {
     const kit = editing.kit;
     kit.name = kit.name.trim() || editing.untitled;
-    const next = editing.isNew ? [...kits, kit] : kits.map((k) => (k.id === kit.id ? kit : k));
-    if (!(await saveKits(next))) return;
+    if (!(await saveKits([kit]))) return;
     selected = kit.id;
     editing = null;
     render(true);
@@ -951,9 +951,19 @@ export function initKits(ctx) {
     if (full()) loadCatalog().then(() => !editing && render(true));
   }).observe(card, { attributes: true, attributeFilter: ["class"] });
 
-  // The players (for Give to) while the card shows.
+  /** Unfolded and on screen: not scrolled away, nor under the bug reports, Settings or a dialog. */
+  function onScreen() {
+    if (document.hidden || card.hidden || card.classList.contains("folded")) return false;
+    const r = card.getBoundingClientRect();
+    const [left, right] = [Math.max(r.left, 0), Math.min(r.right, innerWidth)];
+    const [top, bottom] = [Math.max(r.top, 0), Math.min(r.bottom, innerHeight)];
+    if (right <= left || bottom <= top) return false;
+    return card.contains(document.elementFromPoint((left + right) / 2, (top + bottom) / 2));
+  }
+
+  // The players (for Give to) while the card shows (the Give to menu asks again when it opens).
   setInterval(async () => {
-    if (!ctx.expanded || editing) return;
+    if (!ctx.expanded || editing || !onScreen()) return;
     await loadPlayers();
     render();
   }, PLAYERS_EVERY);
@@ -1012,9 +1022,13 @@ export function initKits(ctx) {
       selected = kit.id;
       render(true);
     },
-    /** The kits again from their files (they may have changed in Settings). */
+    /** The kits again from their files (copied into the Kits folder, or changed there), unless
+     * one is being edited or renamed. */
     async reload() {
-      kits = await invoke("kits_load").catch(() => kits);
+      if (editing || renaming) return;
+      const list = await invoke("kits_load").catch(() => null);
+      if (!list || editing || renaming || JSON.stringify(list) === JSON.stringify(kits)) return;
+      kits = list;
       render(true);
     },
     /** Esc belongs to the kits (an amount, the editor, a rename), not to leaving full screen. */

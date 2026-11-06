@@ -9,6 +9,9 @@
 //                              inventory, printed to the log: DropLaunch adds it to its kits.
 //   Whitelist: when DropLaunch's whitelist is on (data/DropLaunch/whitelist.json, written by
 //   DropLaunch), only the players in it can join.
+//   Key: the lines for DropLaunch carry the key DropLaunch writes at every start
+//   (data/DropLaunch/key.json). Nobody in the game knows it, so chat typed to look like one of
+//   these lines isn't taken for a report.
 //   droplaunch.players         (server console / RCON only) who's where, as JSON.
 //   droplaunch.tp <steamid> <x> <y> <z> [yaw]   (console / RCON) teleport a player there.
 //   droplaunch.tpto <steamid|*> <x> <z>         (console / RCON) teleport a player, or everyone,
@@ -28,13 +31,14 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("DropLaunch", "DropLaunch", "1.4.0")]
+    [Info("DropLaunch", "DropLaunch", "1.5.0")]
     [Description("Testers type /bug in chat and the report shows up on DropLaunch's map, where they stood.")]
     public class DropLaunchPlaytest : RustPlugin
     {
         private const string Marker = "DLBUG1 ";
         private const string KitMarker = "DLKITSAVE1 ";
         private const string WhitelistFile = "DropLaunch/whitelist";
+        private const string KeyFile = "DropLaunch/key";
         private const float Cooldown = 3f;
         private const int MaxText = 300;
         private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
@@ -90,7 +94,7 @@ namespace Oxide.Plugins
             }
             sb.Length--; // the last comma
             sb.Append('}');
-            Puts(Marker + sb);
+            Puts(Marker + Key() + " " + sb);
             player.ChatMessage("<color=#7a95e3>DropLaunch</color>: bug report sent (" + (grid ?? "?") + ").");
         }
 
@@ -127,7 +131,7 @@ namespace Oxide.Plugins
                 player.ChatMessage("<color=#7a95e3>DropLaunch</color>: you're not carrying anything to save.");
                 return;
             }
-            Puts(KitMarker + sb);
+            Puts(KitMarker + Key() + " " + sb);
             player.ChatMessage("<color=#7a95e3>DropLaunch</color>: kit saved (" + count.ToString(Inv) + " items). It's in DropLaunch's Give items.");
         }
 
@@ -148,6 +152,32 @@ namespace Oxide.Plugins
             }
             sb.Append(']');
             return count;
+        }
+
+        // ------------------------------------------------------------------ key
+
+        private class KeyData
+        {
+            public string key;
+        }
+
+        /// The key DropLaunch wrote for this start, read each time (it's new at every start, and a
+        /// server that ran before DropLaunch was updated gets it later). "-": none there, and
+        /// DropLaunch won't take the line.
+        private static string Key()
+        {
+            try
+            {
+                if (Interface.Oxide.DataFileSystem.ExistsDatafile(KeyFile))
+                {
+                    var data = Interface.Oxide.DataFileSystem.ReadObject<KeyData>(KeyFile);
+                    if (data != null && !string.IsNullOrEmpty(data.key)) return data.key;
+                }
+            }
+            catch (Exception)
+            {
+            }
+            return "-";
         }
 
         // ------------------------------------------------------------------ whitelist

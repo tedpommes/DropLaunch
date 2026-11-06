@@ -307,7 +307,7 @@ fn user_strings(data: &[u8]) -> Vec<String> {
     entries(heap)
         .filter(|e| e.len() > 1)
         .map(|e| {
-            let units: Vec<u16> = e[..e.len() - 1].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            let units: Vec<u16> = e[..e.len() - 1].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
             String::from_utf16_lossy(&units)
         })
         .collect()

@@ -4,6 +4,7 @@ import { $, el, icon, invoke, fmtBytes, fmtWhen, fmtDuration, fileName, toast, c
 import { initConsoleInput } from "./console.js";
 import { LiveGraph, fmtRate, niceBytes, niceCeil } from "./graph.js";
 import { t, rich, fmtList } from "./i18n.js";
+import { targetOf } from "./maps.js";
 
 const MAX_CONSOLE_LINES = 3000;
 // Boot stages read from the server's log, in order (the backend's boot::Stage).
@@ -43,11 +44,11 @@ const PHASE_NAMES = {
 const FRAMEWORK_NAMES = { none: t("framework.none"), carbon: t("framework.carbon"), oxide: t("framework.oxide") };
 // What the performance graph can show (serverinfo every 2 seconds, the last 5 minutes).
 const PERF_LINES = {
-  fps: { key: "fps", label: t("perf.fps"), color: "#4cc38a", format: (v) => t("perf.fpsValue", { n: Math.round(v) }), floor: 30 },
-  netIn: { key: "netIn", label: t("perf.netIn"), color: "#7a95e3", format: fmtRate, nice: niceBytes, floor: 4096 },
-  netOut: { key: "netOut", label: t("perf.netOut"), color: "#e46fb0", format: fmtRate, nice: niceBytes, floor: 4096 },
-  memory: { key: "memory", label: t("perf.memory"), color: "#e6b450", format: (mb) => fmtBytes(mb * 1048576), nice: (mb) => niceCeil(mb / 1024) * 1024, floor: 1024 },
-  players: { key: "players", label: t("perf.players"), color: "#a98be8", format: (v) => String(Math.round(v)), nice: niceCeil, floor: 4 },
+  fps: { key: "fps", label: t("perf.fps"), color: "--ok", format: (v) => t("perf.fpsValue", { n: Math.round(v) }), floor: 30 },
+  netIn: { key: "netIn", label: t("perf.netIn"), color: "--accent", format: fmtRate, nice: niceBytes, floor: 4096 },
+  netOut: { key: "netOut", label: t("perf.netOut"), color: "--pink", format: fmtRate, nice: niceBytes, floor: 4096 },
+  memory: { key: "memory", label: t("perf.memory"), color: "--warn", format: (mb) => fmtBytes(mb * 1048576), nice: (mb) => niceCeil(mb / 1024) * 1024, floor: 1024 },
+  players: { key: "players", label: t("perf.players"), color: "--violet", format: (v) => String(Math.round(v)), nice: niceCeil, floor: 4 },
 };
 /** One line on its own (its own format and scale). */
 const perfView = (tab, line) => ({ tab, series: [line], format: line.format, nice: line.nice, floor: line.floor });
@@ -242,7 +243,7 @@ export function initServer(ctx) {
     if (more && serverFolded()) return [...nodes, startButton(m)];
 
     const meta = m.procgen
-      ? t("maps.procgen.meta", { seed: 1184645116, size: 3000 })
+      ? t(m.file ? "maps.procgen.metaFile" : "maps.procgen.meta", { seed: m.seed ?? 1184645116, size: m.size ?? 3000, file: m.file })
       : [m.outside ? m.folder : m.folder ? `Maps\\${m.folder}` : t("maps.folderName"), fmtBytes(m.size), fmtWhen(m.modified)].filter(Boolean).join(" · ");
     nodes.push(
       el(
@@ -825,7 +826,7 @@ export function initServer(ctx) {
 
   async function makeStartFile(m) {
     try {
-      const paths = await invoke("create_start_file", { target: m.procgen ? { kind: "procgen" } : { kind: "map", path: m.path } });
+      const paths = await invoke("create_start_file", { target: targetOf(m) });
       toast(
         paths.length > 1 ? t("server.startFiles.ready", { files: fmtList(paths.map(fileName)) }) : t("server.startFile.ready", { file: fileName(paths[0]) }),
       );
@@ -845,7 +846,13 @@ export function initServer(ctx) {
   }
 
   // ---------------------------------------------------------------- console
+  // The newest console line shown (its `seq`).
+  let lastSeq = 0;
   function appendLines(lines) {
+    // A line comes both in the status and in an event when it was said while the window was
+    // loading: shown once (`seq` counts up; DropLaunch's own notes in the window have none).
+    lines = lines.filter((line) => !(line.seq <= lastSeq));
+    for (const line of lines) if (line.seq > lastSeq) lastSeq = line.seq;
     if (!lines.length) return;
     const box = consoleBox;
     box.querySelector("#console-empty")?.remove();
@@ -911,10 +918,15 @@ export function initServer(ctx) {
     if (view?.phase === "ready") join();
   });
 
+  // Lines that come before the first status: shown after it, the ones it didn't have.
+  let early = [];
   window.__TAURI__.event.listen("server", (e) => {
     const ev = e.payload;
     if (ev.kind === "state") apply(ev.server);
-    else if (ev.kind === "lines") appendLines(ev.lines);
+    else if (ev.kind === "lines") {
+      if (early) early.push(...ev.lines);
+      else appendLines(ev.lines);
+    }
   });
 
   async function load() {
@@ -925,6 +937,9 @@ export function initServer(ctx) {
     } catch (err) {
       toast(t("server.readFailed", { error: err }), "error");
     }
+    const waiting = early ?? [];
+    early = null;
+    appendLines(waiting);
   }
 
   return {

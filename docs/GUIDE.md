@@ -5,34 +5,54 @@ Everything DropLaunch does, screen by screen. The short version is in the [READM
 ## Using it
 
 Put `DropLaunch.exe` in a **new folder**, or in the folder that holds your **SteamCMD** folder
-(v1 layout). The exe is the only file DropLaunch needs; what it downloads goes next to it:
+(v1 layout). The exe is the only file DropLaunch needs; what it downloads, and what it keeps for
+itself, go next to it:
 
 ```
 DropLaunch.exe
 SteamCMD\                downloaded automatically
+  update_rust_server.bat update all your server folders without DropLaunch
 Server_Files\            the Rust dedicated server (~6 GB), the branch installed first
 Server_Files_staging\    another branch, installed next to it (one folder per branch)
-  update_server.bat      update the server without DropLaunch (re-applies Oxide)
+  update_server.bat      update this server folder without DropLaunch
   start_procgen_server.bat
   start_<map>.bat        normal server, one per map you started
   start_<map>_prefab.bat the same map in prefab test mode
   logs\droplaunch_*.log  the server logs DropLaunch follows
 Maps\                    the active maps folder: your .map files (subfolders work too), watched
+DropLaunch-data\         DropLaunch's own: settings, kits, bug reports, map pictures, the log…
 ```
 
-Settings live in the user's app data, `%LOCALAPPDATA%\DropLaunch\settings.json` (one entry per
-folder DropLaunch ran from, so two copies in two folders keep their own folders and history). A
-DropLaunch started from a folder it never ran from (new, moved, copied, or an exe sent to someone)
-starts like a new DropLaunch: default settings, the welcome screen, and only the SteamCMD, server
-and maps folders it finds next to itself (else the default ones there, which setup downloads
-into). Nothing comes along from another folder's settings: not the owner, options, history or
-folders, and Dropped assets only lists what was dropped on that folder. Kits, bug reports and added
-languages are kept per Windows user (in the app data) and shared by DropLaunch folders on the
-same PC; on another PC there are none.
-Entries of folders that are gone are removed, but not while their drive (a USB stick, a network
-share) isn't there.
-Older versions kept `droplaunch.json` next to the exe: it's moved in on the first start and
-removed. (`DROPLAUNCH_HOME` or `DROPLAUNCH_DATA` keep a dev build's settings in their own folder.)
+Everything DropLaunch keeps for itself is in `DropLaunch-data` next to the exe: `settings.json`,
+the kits (`Kits\`, item pictures in `ItemIcons\`), bug reports (`Playtest\`), map pictures
+(`Thumbs\`), added languages, themes and start files, the console history, Rust's maps put aside,
+`droplaunch.log`, and the window's own storage (`WebView\`, WebView2's: the layout and the other
+choices the window keeps, and its cache). Nothing goes anywhere else, but the notifications' name
+in the registry (see Windows notifications). So the folder is all of it: moved or copied with its
+`DropLaunch-data`, DropLaunch comes along as it was (paths inside the folder are kept relative to
+it). An exe on its own (new, sent to someone, or copied elsewhere) starts like a new DropLaunch:
+default settings, the welcome screen, and only the SteamCMD, server and maps folders it finds next
+to itself (else the default ones there, which setup downloads into). Two DropLaunch folders share
+nothing: not the owner, options, history, kits or bug reports, and Dropped assets only lists what
+was dropped on that folder.
+Settings are written to `settings.json.<process id>.tmp` first and then renamed; one that a
+DropLaunch ended halfway through a save left behind is removed at the next start (once it's more
+than a minute old).
+Where DropLaunch can't write next to the exe (Program Files, say), its data goes into the user's
+app data, `%LOCALAPPDATA%\DropLaunch`, with one settings entry per folder (an entry whose folder is
+gone is removed, but not while its drive, a USB stick or a network share, isn't there).
+**Older versions** kept it all in the user's app data: `%LOCALAPPDATA%\DropLaunch` (a settings
+entry per folder DropLaunch ran from, the rest shared by them all) and the window's storage in
+`%LOCALAPPDATA%\gg.droplaunch.desktop`. The first start of this version in a folder moves its
+settings into its `DropLaunch-data`, with a copy of the shared kits, bug reports, map pictures,
+languages, themes and the rest. Rust's maps put aside and the window's storage go with the first
+folder (the window's storage is moved whole; where it can't be, on another drive, the window
+starts with its defaults). When no other folder with a DropLaunch exe in it is left, the last one
+moves the rest and both old folders are removed. A folder that never ran DropLaunch takes nothing.
+Before that, `droplaunch.json` next to the exe held the settings: it's moved in on the first start
+and removed. (`DROPLAUNCH_DATA` keeps a dev build's data in a folder of its own, shared like the
+app data, and takes nothing from the app data; with only `DROPLAUNCH_HOME`, the data folder is in
+there.)
 
 A fresh DropLaunch first shows a welcome screen ("Rust server setup and custom map testing made
 easy"): **Set up a server** with what it takes (download SteamCMD, download the Rust server files;
@@ -86,6 +106,13 @@ doesn't switch it):
   default, only the owner and the players added in Settings can join) and, with Carbon,
   **Enable Carbon profiler**. With None they're hidden, and come back as they were.
 
+While it runs, **Continue when done** (next to Cancel, unticked at every start) decides what
+happens at the end. Ticked, the window says how it went and closes by itself after 5 seconds (the
+Maps page shows the server starting). Unticked, the finished steps stay in view, the checkbox goes
+and Cancel becomes **Next**: only Next shows how it went, with **Continue** to close the window.
+Esc closes it either way, and the Maps page then says how it went. A setup that failed or was
+cancelled says so at once, with **Try again**.
+
 When a dropped map is waiting (a `.map` dropped on a fresh install:
 the title is then **Getting DropLaunch Ready**), **Run test map server** starts it instead, with **Start it in
 prefab test mode** under it for the map's first start. **Carbon's
@@ -102,7 +129,9 @@ registry for the Steam folder and the signed-in account, `config/loginusers.vdf`
 and name, `config/avatarcache` for their pictures; no Steam API, no network), only when pressed,
 and shows the accounts as cards to pick the owner (admin) of every test server from. It adds
 `ownerid <steamid> "<name>" "added by DropLaunch"` to `server/<identity>/cfg/users.cfg`, which Rust
-reads at startup, so double-clicked start files have it too; a running server gets it over RCON. A
+reads at startup, so double-clicked start files have it too; a running server gets it over RCON.
+A users.cfg that can't be written doesn't stop the others; DropLaunch names it (that server takes
+the owner again when DropLaunch starts it). A
 Steam64 ID or `steamcommunity.com/profiles/…` link can be typed instead. The box is never filled in
 before that: an owner saved earlier is only named under it, and stays the owner while it's left
 empty (untick it to remove the owner).
@@ -139,7 +168,8 @@ the tab also shows how far Getting started is, and **Start over**).
 
 - **The list**: three sections, each one folds away: **Built in** (the procedural map), the
   **Active folder** (every `.map` in the active maps folder and its subfolders, newest first or by
-  name, with search) and the **History** of started maps (kept in the settings).
+  name, with search) and the **History** of started maps (kept in the settings; a start you
+  call off when DropLaunch asks about the running server doesn't go in).
 - **Watched folder** (like v1): DropLaunch watches the active maps folder, and only that one. Maps
   added, removed or renamed there show up right away, and when one is saved (a RustEdit save or
   export) or added, its row in **Active folder** is marked (**saved** / **new**) with **Start** (or
@@ -154,10 +184,14 @@ the tab also shows how far Getting started is, and **Start over**).
   **Drop** `.map` files, `.zip` files with maps or folders on the window, or on `DropLaunch.exe`
   (it's single-instance: a drop on the exe goes to the open window). Dropped maps are used where
   they are, like v1, so a re-export is picked up on the next start; maps in a `.zip` are unpacked
-  into `Maps\<zip name>\`. What else the zip holds is used too: a kit file is added to the kits, a
-  DropLaunch language file is added (not switched to; Settings has it), and a start file (a .bat or
+  into `Maps\<zip name>\`. A `.zip` with a map that would unpack to more than 2 GB, or that needs
+  more room than the drive has (keeping 256 MB free), is refused before anything is unpacked, and
+  a file that unpacks to more than the zip says is stopped there. What else the zip holds is used too: a kit file is added to the kits, a
+  DropLaunch theme or language file is added (not switched to; Settings has it), and a start file (a .bat or
   .sh that runs RustDedicated) is put next to the map, where its settings go into the map's own
-  start files (other files stay in the zip).
+  start files (other files stay in the zip). A start file dropped on its own (`.bat`, `.cmd` or
+  `.sh`, like one from droplaunch.gg's generator) is kept to choose (see Start files below); any
+  other file is "Not a supported file", pointing at Settings → Dropped assets.
 - **The game's map cache** (v1's client cleanup): Rust keeps every map it loaded from a server in
   `<Rust>\maps\` as `<name>_<number>.map` and never removes any, so a map saved again under the
   same name can be loaded from an old copy. Before a map starts, DropLaunch removes the game's
@@ -167,7 +201,9 @@ the tab also shows how far Getting started is, and **Start over**).
   `libraryfolders.vdf` and `appmanifest_252490.acf`.
 - **Start files**: the first start of a map writes two files, `Server_Files\start_<map>.bat` and
   `start_<map>_prefab.bat`, so every server also starts with a double-click, without DropLaunch.
-  DropLaunch runs the one you picked. Each start loads the current map file into a fresh world (the
+  DropLaunch runs the one you picked and gives it 3 minutes to start RustDedicated (a first start
+  on a slow drive, or one an antivirus scans first, can take a while); a start file that ends
+  without starting it is reported at once. Each start loads the current map file into a fresh world (the
   server keeps its own copy of the map, which would otherwise go stale). DropLaunch reads the file
   back before starting it: your edits (ports, password, max players…) are kept, and it's only
   rewritten when the map moved or it came from an older DropLaunch. A start file that came with the
@@ -176,6 +212,27 @@ the tab also shows how far Getting started is, and **Start over**).
   the map, name, ports, RCON or log, and only plain values) replaces DropLaunch's own or is added
   (`rem Also uses the settings of start.bat`); prefab test mode keeps its own. Newer than the map's
   start files, it has them rewritten once.
+- **Your start files**: a start file dropped on the window or the exe, or found in a dropped `.zip`
+  (one that runs RustDedicated with `+server.` settings), is copied to `StartFiles\` in the data
+  folder under a safe name, as text (`my_start.bat.txt`: only its settings are used, and scripts
+  written to an app's data folder look like malware to virus scanners; the same name dropped again
+  replaces it) and tagged by what it's for: **Custom maps** when it has `+server.levelurl`, else
+  **Procedural map**. In a `.zip` with maps, a start file belongs to those maps (its settings go
+  into their start files) unless it sets a level, seed or size of its own.
+  - A **procedural map's** goes in the map list under **Your start files** (a ringed file icon and
+    a "your start file" tag, so it doesn't look like a map) and is selected. Started from there it
+    gets a file of its own, `start_procgen_<name>.bat` with the identity `droplaunch_procgen_<name>`,
+    with every plain `+setting value` of it: its level, seed and size too. The row's x or the menu's
+    Remove this start file takes it off the list and out of Settings.
+  - A **custom map's** asks whether to use its settings for custom maps from now on.
+  - One of each kind can be chosen in Settings → Dropped assets → Start files (`procgenStartFile` /
+    `mapsStartFile` in the settings); DropLaunch's own files then take every plain `+setting value`
+    from it (port, name, players, decay…), but not the map, the procedural map's level, seed and
+    size, the identity (world folder), RCON or the log, which DropLaunch keeps setting itself: the
+    procedural map keeps its seed and size, every custom map loads its own map. The file says so
+    (`rem Uses the settings of my_start.bat, your start file.`) and is rewritten when another one is
+    chosen, none any more, or the chosen one is dropped again. The procedural map's row shows its
+    seed and size and the file's name.
 - **Prefab test mode** (v1's prefab start file): no events, cargo ship, boat paths, ocean patrols or
   terrain protection. Some maps hang for many minutes on ocean patrol paths without it. Both files
   share the server identity, so either one gives the same fresh world; each has its own log.
@@ -183,7 +240,9 @@ the tab also shows how far Getting started is, and **Start over**).
   game files → Carbon/Oxide → RCON connected → map → entities → checks → ready, in the console's
   colours), then players, fps, entities and uptime over WebRCON, **Join in Rust**, **Copy connect**,
   **Restart** (same start file) and **Stop** (`quit` over RCON so it saves, ending it only if
-  needed). Another map while one runs: DropLaunch asks, stops it, starts the new one. A server that
+  needed). Another map while one runs: DropLaunch asks, stops it, starts the new one. Another map
+  started in the moment a restart has stopped the server but not started it again comes instead
+  of the restart (the console says so). A server that
   restarts itself (e.g. the RustEdit extension updating) is started again. Port 28015/28016 already
   taken: DropLaunch says so instead of starting a broken server.
 - **The right Rust game**: a client only joins a server of its own build. Rust (app 252490) joins
@@ -194,8 +253,9 @@ the tab also shows how far Getting started is, and **Start over**).
   Staging**). When the other game is open, Join offers **Close it and start …** (straight into
   the server); when the right one isn't installed, **Install it in Steam** (`steam://install`);
   when Rust is set to another beta than the server (public vs last-month), a note says which to
-  pick under Properties → Betas. **Join automatically** (Settings) starts the right game too, and only says
-  so in the console when another Rust is open. The map cache cleanup covers both games' caches.
+  pick under Properties → Betas. **Join automatically** (Settings) starts the right game too, and says in
+  the console what it did: opening Rust, or what to press when another Rust is open or the right
+  one isn't installed. The map cache cleanup covers both games' caches.
 - **Join in Rust**: with Rust closed, DropLaunch starts it with `+connect 127.0.0.1:28015`
   (`steam://run`, no server query involved). With Rust open it asks: **Restart Rust and join**
   (closes Rust like its X button, waits until it's gone, starts it again straight into the server)
@@ -235,15 +295,23 @@ the tab also shows how far Getting started is, and **Start over**).
     they looked and what at (the prefab or "terrain" their view ended on, and how far). **Teleport**
     takes you (the server owner, in the game) to the spot, facing the same way; **Fixed** /
     **Reopen**; delete. Reports are kept per map across its versions (`Map_v19.map` and
-    `Map_v20.map` share one list, in `%LOCALAPPDATA%\DropLaunch\Playtest\<map>.json`) and say
+    `Map_v20.map` share one list, in `DropLaunch-data\Playtest\<map>.json`; without a space,
+    `_`, `-` or `.` in front the `v` has to follow a name of 3 letters or more, so `RaceDownv19`
+    is a version of RaceDown but `Dev1` is a map of its own) and say
     which version they were reported on and fixed in. A new report while DropLaunch runs: a toast,
     a Windows notification in the background, and the tester gets "bug #3 is on the host's list"
     in chat. **Export report** saves one web page with the map, the pins and the list.
   - How: DropLaunch puts a small plugin (**DropLaunch**, `DropLaunchPlaytest.cs`, in Carbon's or Oxide's plugins
     folder) in the server while **Bug reports on** is ticked; both frameworks load it by
     themselves, also while the server runs. It prints each report to the server's log
-    (`DLBUG1 {json}`, which DropLaunch already reads, so reports logged while DropLaunch was closed
-    are picked up when it finds the server again) and answers `droplaunch.players`,
+    (`[DropLaunch] DLBUG1 <key> {json}`, which DropLaunch already reads, so reports logged while
+    DropLaunch was closed are picked up when it finds the server again). The key is new at every
+    start and only in the server's folder (`data/DropLaunch/key.json` in Carbon's or Oxide's
+    folder; the plugin reads it each time it prints), so nobody in the game knows it: chat, or a
+    player name, made to look like the plugin's line isn't taken for a report, and neither is a
+    line without the key (it shows in the console as it is). A server that was already running
+    when DropLaunch was updated gets the new plugin and a key within a second. The plugin also
+    answers `droplaunch.players`,
     `droplaunch.tp`, `droplaunch.tpto`, `droplaunch.tell`, `droplaunch.items` and `droplaunch.givekit`
     (Kits, below) over RCON; those only work from the
     server's console and RCON, not for players. It needs Carbon or Oxide (the page says so otherwise).
@@ -273,8 +341,9 @@ the tab also shows how far Getting started is, and **Start over**).
   carbonmod.gg/tools/profiler-panel (load a `.cprf` there).
   It starts folded to its title line; the arrow opens it (kept between starts).
 - **Map pictures**: a map's icon in the list is a picture of it, drawn from the .map file in the
-  background (once per version of the file, kept in `%LOCALAPPDATA%\DropLaunch\Thumbs`; the
-  procedural map's once a server has built it). Click it for the big map: zoom, drag, the grid, and
+  background (once per version of the file, kept in `DropLaunch-data\Thumbs`: a new version
+  replaces the old picture, and pictures not shown for 30 days are removed when DropLaunch starts;
+  the procedural map's once a server has built it). Click it for the big map: zoom, drag, the grid, and
   the bug reports kept for that map as pins. One picture at a time (a big map takes a few hundred
   MB while it's read), and only the parts of the file a picture uses are unpacked (heights, ground
   types, water, roads/rivers/rails: about 60% of it), so a 6K map's icon takes ~50 ms the first time.
@@ -296,7 +365,7 @@ the tab also shows how far Getting started is, and **Start over**).
     modules, ~150), Oxide's from its DLLs plus its well-known permission and plugin commands. So
     each branch and each framework gets its own list.
   - **History**: ↑/↓ go through the commands typed before (newest first), kept between sessions in
-    `%LOCALAPPDATA%\DropLaunch\console-history.txt` (the last 200; a repeat moves to the top).
+    `DropLaunch-data\console-history.txt` (the last 200; a repeat moves to the top).
 - **Resizing**: DropLaunch opens at 640 × 950 (its smallest width), tall enough for the setup window with every option ticked and for Settings, Rent a server without scrolling (smaller on a smaller screen, so it always fits); the
   cards use the whole window, full screen too
   (the side column grows with big windows until it's dragged). With more options, the bar between
@@ -315,7 +384,7 @@ the tab also shows how far Getting started is, and **Start over**).
 - **Windows notifications** while DropLaunch is in the background: a map was saved (click: start
   it) and the server is ready (click: join it). Switch them off in Settings. DropLaunch registers its name and icon for them under
   `HKCU\Software\Classes\AppUserModelId\gg.droplaunch.desktop` (no installer or Start menu
-  shortcut needed); the icon file goes to `%LOCALAPPDATA%\DropLaunch\`.
+  shortcut needed; Windows only looks for it there); the icon file goes into `DropLaunch-data`.
 - Servers keep running when DropLaunch closes. When it opens again, or a start file is
   double-clicked, DropLaunch finds the running server and follows it again.
 
@@ -332,8 +401,8 @@ the tab also shows how far Getting started is, and **Start over**).
   them back: with an update waiting, `validate` on the first run does nothing (SteamCMD skips the
   check and still plans to patch the missing file). So an update or repair that fails because files
   are missing always runs once more with `validate` (the console says why, naming Carbon when it's
-  installed), which downloads them again; `update_server.bat` does the same when Steam's manifest
-  doesn't say fully installed (StateFlags 4) after its first run.
+  installed), which downloads them again; the update scripts do the same when Steam's manifest
+  doesn't say fully installed (StateFlags 4) after their first run.
 - **Branches side by side**: every branch gets its own folder, so testing a map on public and on
   staging needs no download in between. The server folder holds the branch installed first;
   another branch goes next to it as `Server_Files_<branch>` (`branchDirs` in the settings remembers
@@ -357,10 +426,23 @@ the tab also shows how far Getting started is, and **Start over**).
   files). The Maps page's update card asks with **Also update Carbon** next to **Update server
   files**; it's the same switch as **Settings → Servers → Update Carbon or Oxide with every server
   update**, on by default (`updateFramework`). Not for verify/repair or when the build didn't change.
+  The update scripts follow the same switch (below).
 - **Oxide**: an update or verify puts Rust's original files back, which switches Oxide off. DropLaunch
   re-applies it right after; the warning and **Re-apply** button cover updates done elsewhere, and
-  starting a server with Oxide switched off asks first. `update_server.bat` does the same check
+  starting a server with Oxide switched off asks first. The update scripts do the same check
   (`findstr` for Oxide's patch, then `curl` + `tar`, both built into Windows).
+- **Updating without DropLaunch**: `update_rust_server.bat` in the SteamCMD folder updates every
+  server folder (each installed branch's, one `set "DIR=..." & set "BRANCH=..." & call :update`
+  line each) the way DropLaunch does: SteamCMD, once more with `validate` when the update didn't go
+  through, then the newest Carbon or Oxide when Rust's build changed and **Update Carbon or Oxide
+  with every server update** is on (`UPDATE_FRAMEWORK=1` at the top), otherwise Oxide put back
+  when the update replaced its files. A folder that isn't there is skipped, not downloaded again.
+  `update_rust_server.bat validate` checks every file. `update_server.bat` in each server folder
+  does the same for that folder only (setup writes it before the download, so a stuck download can
+  be finished with it). DropLaunch writes both at start, after setup and updates, and when a folder
+  or that setting changes, each only when its text changed; paths inside DropLaunch's folder are
+  relative, so the folder can be moved. Stop the servers first: files in use can't be updated.
+  Both are listed under **Mods & scripts**.
 - **Mods & scripts**, **Rust Game Maps** (the game's map cache, see above) and **Folders** (one
   **Server files · <branch>** row per installed branch, each with its own change and open buttons;
   moving the first branch's folder keeps the others where they are).
@@ -382,8 +464,9 @@ stacked when it isn't:
   inventory: **Wear** (7 slots), **Belt** (6) and **Inventory** (24, up to its last used row), each
   item with its amount. Edit, duplicate, delete. **Basic Build Kit** comes with DropLaunch (added
   to the Kits folder once, `builtin-kits.txt` remembers it, so a deleted one stays gone).
-- **Give to**: the players on the server (Rust's own `playerlist`, every 5 s), each with **Give**,
-  and **Give to all (N)**.
+- **Give to**: the players on the server (Rust's own `playerlist`, every 5 s while the card is
+  open and on screen, and again when the Give to list opens), each with **Give**, and **Give to
+  all (N)**.
 - **New kit** / edit opens the editor in the same full screen: Rust's items by category (All,
   Weapons, Ammunition, Attire, Medical, Food, Tools, …) on the left; the search looks in the chosen
   category (each category says how many it finds, and **Show all N found** when the chosen one
@@ -400,7 +483,7 @@ stacked when it isn't:
 
 **/droplaunch kit** (or `/droplaunch kit Raid kit`) in Rust's chat saves what that player wears,
 has in the belt and in the inventory as a kit (admins only, like the server owner; the plugin
-prints `DLKITSAVE1 {json}` to the log, DropLaunch adds it to the Kits folder once, named "<player>'s
+prints `DLKITSAVE1 <key> {json}` to the log, with the same key as bug reports, DropLaunch adds it to the Kits folder once, named "<player>'s
 inventory" when no name was typed, picks it in Give items and says so).
 
 How it's given, over RCON: with the DropLaunch plugin loaded, `droplaunch.givekit <steamid>
@@ -412,7 +495,9 @@ when there's no room). Without it, Rust's
 inventory; the drawer says so). Each kit is a file of its own, `Kits/<name>.json` in
 DropLaunch's data folder (`"droplaunchKit": 1`, the kit's id, name, wear, belt, main; the old
 `kits.json` moves over once): send one to share it, and dropping a kit file on DropLaunch or its
-exe adds it (the same id replaces that kit). The **Bug reports** card shows how reports stand
+exe adds it (the same id replaces that kit). A kit file copied into the Kits folder while
+DropLaunch is open shows up when you come back to its window; saving, renaming or deleting a kit
+only touches that kit's file. The **Bug reports** card shows how reports stand
 (live, off with **Turn on**, needs Carbon or Oxide), the open count and the newest three open
 reports (a click opens the page on that report); its expand button and **Open bug reports** open
 the page.
@@ -440,17 +525,24 @@ borders trimmed); the list is in `ui/rent.js`.
 The gear at the end of the top bar opens **Settings**: a page over the whole window that slides
 down from the top (**Back** at the top left, or Esc, slides it away: every page over the window
 is left the same way, like the bug reports page: Settings, Kits, the map viewer, Licenses). It
-opens over everything, a full-screen card like Give items too, and its Esc closes only Settings. Tabs on the left (Servers, Notifications, Guide, Dropped assets, Language, then Rent a server and About), each in its own colour (just
+opens over everything, a full-screen card like Give items too, and its Esc closes only Settings.
+Tab stays inside Settings, and inside the other windows over the page (welcome, setup, update, map
+viewer, About, questions). Each opens with the keyboard focus inside it (its main button, or else
+its first control: the welcome's Set up card), and closing one puts the focus back where it was. Tabs on the left (Servers, Notifications, Guide, Dropped assets, Language, Visuals, then Rent a server and About), each in its own colour (just
 their icons in a narrow window; up/down arrows move between them), and the tab's page on the right,
 which scrolls: settings in a column in the middle, Rent a server across the whole width (all seven
 hosts in one row when there's room). On/off settings are switches; rows that do something (open a folder, a window) end
 in an icon saying what.
 - **Language**: a tile per language (built in / next to DropLaunch.exe / added; a click switches),
   how to add one, **Languages folder** and **Save the English file…** (see below).
+- **Visuals**: a tile per theme, each with a little window in its colours (the one in use has a
+  check on it; a click switches, right away), how to add one, **Save this theme as a file…** and
+  **Themes folder** (see Themes below).
 - **Servers**: **Join automatically when a server is ready** (was on the server card); **Before a
   map starts, remove Rust's old copies of it** (was on Rust Game Maps, whose note now says which
   way it's set); **Back up maps before removing them** (those copies, and Clear Rust's map cache,
-  move to `ClientMapBackups\<date>\` in the data folder instead, kept for 30 days; **Map backups**
+  move to `ClientMapBackups\<date>\` in the data folder instead, kept for 30 days: older days'
+  folders are removed when DropLaunch starts and before maps are backed up; **Map backups**
   opens it);
   **Update Carbon or Oxide with every server update** (see Server files). **Who can join**:
   **Whitelist** and its list: the owner (always), the players added (a Steam64 ID or profile link,
@@ -460,31 +552,35 @@ in an icon saying what.
   (`CanUserLogin`), so changes count right away; anyone else is told the server is whitelisted.
   Off, or without an owner, everyone can join. **Bug reports**: **Clear bug reports…** (says how many
   are kept, over how many maps; asks first) puts every map's reports aside in
-  `Playtest\Cleared\<date>\` in the data folder and their numbering starts at #1 again (Reset
+  `Playtest\Cleared\<date>\` in the data folder (this PC's local date, like the map backups') and their numbering starts at #1 again (Reset
   everything does the same). Reports are numbered per map (all versions of a map share them, the
   procedural map has its own), and a map with no reports left (all deleted) starts at #1 again.
 - **Notifications**: offer to start maps saved in the maps folder, Windows notifications (both were
   under the maps folder in Folders).
 - **Guide**: **Show tips**, the Getting started steps (which are done) and **Start over**.
-- **Dropped assets**: everything dropped on DropLaunch or its exe, by kind: **Maps**, **Zips** (with
-  the maps they held), **Language files**, **Start files** (the server folders' start_*.bat) and
-  **Kits**, each with how many. What comes with DropLaunch has a **Built in** tag: the procedural map's start file, English and Basic Build Kit (also in Settings → Language and in Give items). Start files are listed by their settings: files that only start
-  another map are one row ("Map start file · 3 maps: …"), different settings (port, players,
-  prefab test mode, your own changes) make another; hover one for its files and settings. Click
-  one to use it: a map (or a zip's, or a one-map start file's map) is selected in the map list, a language is switched to, a kit is picked in Give items; the chosen
-  one is marked **In use** (for start files: the one Start uses, DropLaunch's normal file for the
-  selected map on this branch; a prefab one starts with its play button, as does one whose map the
-  list doesn't show, and an older start file of your own can only be shown). Row buttons: start a server with a map, show it in Explorer, take it
-  off the list (the file stays). Kept in `dropped.json` in the data folder (newest first, 300);
+- **Dropped assets**: everything dropped on DropLaunch or its exe, by kind (the lead says what
+  DropLaunch takes): **Maps**, **Zips** (with the maps they held), **Language files**, **Start
+  files** and **Kits**, each with how many. What comes with DropLaunch has a **Built in** tag: DropLaunch's own start file settings, English and Basic Build Kit (also in Settings → Language and in Give items). **Start files** first lists, for the
+  **Procedural map** and then **Custom maps** (each a tag), DropLaunch's settings and the start
+  files dropped on it (seed and size, players, port; hover one for the settings it gives): the one
+  marked **In use** is what that kind starts with, click another to use it, the x removes
+  DropLaunch's copy (the dropped file stays). Below, **In the server folders**: the start_*.bat
+  there by their settings: files that only start another map are one row ("Map start file · 3
+  maps: …"), different settings (port, players, prefab test mode, your own changes) make another;
+  hover one for its files and settings; a prefab one starts with its play button, as does one whose
+  map the list doesn't show. Click one of the other kinds to use it: a map (or a zip's) is selected
+  in the map list, a language is switched to, a kit is picked in Give items; the chosen one is
+  marked **In use**. Row buttons: start a server with a map, show it in Explorer, take it off the
+  list (the file stays). Kept in `dropped.json` in the data folder (newest first, 300);
   maps started from outside the Maps folder count as dropped too. The settings themselves stay
   where they were (Language, Give items, …).
 - **Rent a server** (see above) and **About** (the version, look for a new DropLaunch when it
-  starts, **Licenses**, and the settings file: **Settings file** shows it in Explorer; next to it
-  is `droplaunch.log`, where DropLaunch writes what went wrong in the background and its own
-  crashes, 1 MB at most before it becomes `droplaunch.old.log`) are a group of
+  starts, **Licenses**, and **Data folder**, which opens `DropLaunch-data` (its path under it): the
+  settings, kits, bug reports and the rest, and `droplaunch.log`, where DropLaunch writes what went
+  wrong in the background and its own crashes, in this PC's local time, 1 MB at most before it becomes `droplaunch.old.log`) are a group of
   their own at the bottom. About ends with **Reset everything…** (red, asks first): DropLaunch as it was when it was
   downloaded. Every setting back to its default (options, owner, also out of the servers' users.cfg,
-  whitelist, bug reports, language, guide, map history, and the window's own choices kept in the
+  whitelist, bug reports, language, theme, guide, map history, and the window's own choices kept in the
   browser storage), the folders back to the defaults next to the exe and **nothing linked**
   (`linked: false`): no server, no maps folder, no start files, Start asks for setup, until setup
   has run again (it finds SteamCMD and the server files if they're still there, and links them).
@@ -495,6 +591,42 @@ Per-server things stay where they are (mods, the DropLaunch plugin, Carbon's pro
 folders). With Windows' animation effects off the page still slides in, just quicker (nothing else
 in it moves). In a narrow window with **More options**, the top bar's DropLaunch name makes room
 (the logo stays), and with **Update DropLaunch** showing too the tabs keep only their icons.
+
+### Themes
+
+DropLaunch's colours are a theme. Four come with it (`ui/themes/*.json`, built into the exe):
+**Default** (DropLaunch's own dark blue-grey, the colours it always had), **Light** (light grey and
+white), **Grey** (in between: lighter than Default) and **Vibrant** (deep indigo with brighter
+colours). Settings → Visuals switches between them without a reload; the window's title bar goes
+light or dark with the theme. A theme file:
+
+```json
+{
+  "theme": { "name": "Sunrise", "mode": "light" },
+  "colors": { "accent": "#d9480f", "accent-hover": "#c13f0b" }
+}
+```
+
+- **mode** is `dark` (the default) or `light`. A file only needs the colours it changes: the rest
+  come from Default, or from Light for a light theme.
+- Colours are `#rrggbb` (or `#rrggbbaa`, see-through, as `line` and `line-strong` are; `#rgb` works
+  too), named as in `ui/themes/default.json`: backgrounds (`bg`, `bg-deep`, `card`, `inset`,
+  `console`, `popup`, `tip`), lines, `overlay` (laid thinly over surfaces for hovers and chips) and
+  `shadow`, the text colours, `accent`, `on-accent` (text on accent buttons) and `on-bright` (text on
+  bright chips), `ok` / `warn` / `danger`, the tab colours (`violet`, `orange`, `cyan`, `pink`,
+  `mint`, `coral`) and the console's line colours (`src-…`). Anything else (a name it doesn't know,
+  `url(…)`, a colour name) isn't taken: a wrong value says which colour, a name it doesn't know is
+  left out.
+- **Drop** a theme file on the window or on `DropLaunch.exe`: it's added (copied into
+  `DropLaunch-data\Themes\` as `<its name>.json`; a newer file with the same name
+  replaces it) and used. In a `.zip` with maps it's only added. Added themes have an x on their tile
+  that takes DropLaunch's copy out (Default again if it was in use).
+- **Save this theme as a file…** writes the theme in use with every colour: the start of your own.
+- In styles.css every colour is a variable (`--accent`, …) and its `-rgb` triplet for see-through
+  shades (`rgb(var(--accent-rgb) / 0.2)`); its `:root` holds Default's values (a test keeps them the
+  same as default.json). theme.js puts the chosen theme's on the page, and keeps a copy in the
+  browser storage that index.html puts on before anything shows, so a light theme doesn't start
+  dark. The maps (bug reports, map viewer) keep the game's own colours in every theme.
 
 ### Languages
 
@@ -524,7 +656,7 @@ change a text there and rebuild, and it changes everywhere. The format:
   elements one by one, never read as HTML, so a language file can't put anything else on the page.
 - **Other languages**: a language file next to `DropLaunch.exe` is used by itself (unless another
   language was picked in Settings); one dropped on the exe or on the window is added (copied into
-  `%LOCALAPPDATA%\DropLaunch\Languages\`, a newer file with the same code replaces it) and
+  `DropLaunch-data\Languages\`, a newer file with the same code replaces it) and
   switched to. Settings lists them all (built in / next to DropLaunch.exe / added). A file only
   needs the lines it changes: the rest stays English. A file with code `en` next to the exe changes
   the English texts themselves, without a rebuild.
@@ -537,7 +669,8 @@ change a text there and rebuild, and it changes everywhere. The format:
   and the bug reports' stored data.
 - `src-tauri/tests/lang.rs` keeps the file and the code in step: every key the code uses (`t!` in
   Rust, `t()` / `tn()` / `rich()` in the UI, `data-t…` in index.html) must be in en.json, every
-  placeholder a Rust message fills in must be in its text, and every line in the file must be used.
+  placeholder in a Rust message's text must be filled in where the code uses it (an extra value
+  the text doesn't use passes), and every line in the file must be used.
 
 ### Updates
 
@@ -547,8 +680,8 @@ under [Privacy](../README.md#privacy). A new version opens a window with its not
 **Update DropLaunch**; **Don't show this again** skips the window for that version
 (`skippedUpdate`), and the **Update DropLaunch** button in the top bar opens it
 again. Updating downloads it next to `DropLaunch.exe` with a progress bar, checks it, puts it in
-place (the old one becomes `DropLaunch.exe.old` and is removed on the next start)
-and starts it. A running server keeps running and the new DropLaunch finds it again. When the
+place (the old one becomes `DropLaunch.exe.old`, removed once the new one has its window up;
+if the new one doesn't start, rename `DropLaunch.exe.old` back to `DropLaunch.exe`) and starts it. A running server keeps running and the new DropLaunch finds it again. When the
 folder isn't writable
 (e.g. under Program Files) DropLaunch says so and links to the download page.
 
@@ -562,7 +695,7 @@ release key.
 
 The libraries compiled into DropLaunch ask for their notices and license texts to go along with
 it, so the exe carries them: **About** (the version tag in the top bar, or **Licenses** in the
-footer) lists every one (238 now) with its version, license and the license files it ships,
+footer) lists every one (216 now) with its version, license and the license files it ships,
 searchable. The list is `ui/licenses.json`, made from the Windows build's dependencies:
 
 ```

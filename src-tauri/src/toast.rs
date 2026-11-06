@@ -57,7 +57,6 @@ fn xml(toast: &Toast, icon: Option<&str>) -> String {
 #[cfg(windows)]
 mod imp {
     use super::{xml, Clicked, Toast, APP_ID};
-    use std::path::PathBuf;
     use std::sync::mpsc::{self, Sender};
     use std::sync::{Mutex, OnceLock};
     use crate::sync::Locked;
@@ -125,7 +124,7 @@ mod imp {
     fn register(app: &AppHandle) -> Option<String> {
         let key = format!(r"Software\Classes\AppUserModelId\{APP_ID}");
         let _ = crate::platform::set_user_registry_string(&key, "DisplayName", "DropLaunch");
-        let dir = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)?.join("DropLaunch");
+        let dir = app.state::<crate::commands::AppState>().data_dir();
         let icon = dir.join("notification-icon.png");
         // The UI's logo (the app icon): already in the exe once.
         let bytes = app.asset_resolver().get("logo.png".into())?.bytes;

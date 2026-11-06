@@ -2,8 +2,9 @@
 //! on DropLaunch's map of the server, live, where they stood and looked.
 //!
 //! A small Carbon/Oxide plugin (DropLaunchPlaytest.cs, put in the server's plugins folder while
-//! the kit is on) prints each report to the server's log as `DLBUG1 {json}`, which the server
-//! manager hands over. Over RCON the plugin also tells where everyone is (`droplaunch.players`),
+//! the kit is on) prints each report to the server's log as `DLBUG1 <key> {json}`, which the
+//! server manager hands over. The key is new at every start and only in the server's folder
+//! (`<carbon|oxide>/data/DropLaunch/key.json`), so a chat line can't pass for a report. Over RCON the plugin also tells where everyone is (`droplaunch.players`),
 //! teleports the host to a report (`droplaunch.tp`) and thanks the tester (`droplaunch.tell`);
 //! those commands only work from the server's console and RCON, not for players.
 //!
@@ -28,6 +29,8 @@ use crate::sync::Locked;
 const PLUGIN_FILE: &str = "DropLaunchPlaytest.cs";
 const PLUGIN: &str = include_str!("DropLaunchPlaytest.cs");
 const MARKER: &str = "DLBUG1 ";
+/// The key for the plugin's lines, in its data folder (next to the whitelist).
+const KEY_FILE: &str = "key.json";
 const TICK: Duration = Duration::from_millis(500);
 /// How often the plugin is asked where the testers are.
 const PLAYERS_EVERY: Duration = Duration::from_secs(2);
@@ -36,10 +39,77 @@ const PLAYERS_EVERY: Duration = Duration::from_secs(2);
 const LOAD_GRACE: Duration = Duration::from_secs(90);
 const MAX_REPORTS: usize = 500;
 
-/// The JSON of a bug report in a server log line.
-pub fn report_json(line: &str) -> Option<&str> {
-    let json = line[line.find(MARKER)? + MARKER.len()..].trim();
+/// The JSON of a bug report in a server log line. `key`: the server folder's (`read_key`).
+pub fn report_json<'a>(line: &'a str, key: Option<&str>) -> Option<&'a str> {
+    plugin_json(line, MARKER, key)
+}
+
+/// The JSON after `marker` and the key in a line the DropLaunch plugin printed itself
+/// (`[DropLaunch] DLBUG1 <key> {...}`). Anyone can type the marker in the chat, and Rust logs
+/// those lines too (`[CHAT] Name[id] : ...`); a player can even put `[DropLaunch] DLBUG1 {` in
+/// their name, so the line starts like the plugin's. But nobody in the game knows the key: it's
+/// only in the server's folder, and new at every start. As a second check, only the plugin's
+/// title (older versions were called "DropLaunch Playtest") and the log's own `[time] [level]`
+/// may come before the marker.
+pub fn plugin_json<'a>(line: &'a str, marker: &str, key: Option<&str>) -> Option<&'a str> {
+    let key = key.filter(|k| !k.is_empty())?;
+    let at = line.find(marker)?;
+    let before = line[..at].trim_end();
+    let tag = ["[DropLaunch]", "[DropLaunch Playtest]"].into_iter().find(|tag| before.ends_with(tag))?;
+    if !only_brackets(&before[..before.len() - tag.len()]) {
+        return None;
+    }
+    let json = line[at + marker.len()..].strip_prefix(key)?.strip_prefix(' ')?.trim();
     json.starts_with('{').then_some(json)
+}
+
+/// A report or a kit from the plugin, with this key.
+pub fn is_plugin_line(line: &str, key: Option<&str>) -> bool {
+    report_json(line, key).is_some() || crate::kits::game_kit_json(line, key).is_some()
+}
+
+/// The line has one of the plugin's markers, with whatever key (or none).
+pub fn has_marker(line: &str) -> bool {
+    line.contains(MARKER) || line.contains(crate::kits::GAME_KIT_MARKER)
+}
+
+/// The plugin's key file in a server folder: in the data folder of the framework that runs it
+/// (None: no Carbon or Oxide there).
+fn key_file(server_dir: &Path) -> Option<PathBuf> {
+    let plugins = plugin_path(server_dir)?;
+    Some(plugins.parent()?.parent()?.join("data").join(crate::whitelist::DATA_DIR).join(KEY_FILE))
+}
+
+/// A new key for the plugin's lines in this server folder (at every start, before the server
+/// loads its plugins). The plugin reads it each time it prints. None: no Carbon or Oxide there.
+pub fn new_key(server_dir: &Path) -> std::io::Result<Option<String>> {
+    let Some(file) = key_file(server_dir) else { return Ok(None) };
+    let key = crate::startfile::random_password(24);
+    if let Some(dir) = file.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(&file, serde_json::json!({ "key": key }).to_string())?;
+    Ok(Some(key))
+}
+
+/// The key the plugin in this server folder puts in its lines (None: none written yet).
+pub fn read_key(server_dir: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(key_file(server_dir)?).ok()?;
+    let key = serde_json::from_str::<serde_json::Value>(&text).ok()?.get("key")?.as_str()?.to_string();
+    (!key.is_empty() && key.chars().all(|c| c.is_ascii_alphanumeric())).then_some(key)
+}
+
+/// Nothing but `[...]` groups and spaces, like `[2026.10.13 01:01:16] [INFO] `. A chat line always
+/// has `Name[id] : ` in front of what was typed.
+fn only_brackets(mut text: &str) -> bool {
+    loop {
+        text = text.trim_start();
+        if text.is_empty() {
+            return true;
+        }
+        let Some(end) = text.strip_prefix('[').and_then(|rest| rest.find(']')) else { return false };
+        text = &text[end + 2..];
+    }
 }
 
 /// The console's line for a report.
@@ -63,6 +133,11 @@ pub fn plugin_path(server_dir: &Path) -> Option<PathBuf> {
 /// themselves, also while the server runs). None: no framework to run it.
 pub fn install_plugin(server_dir: &Path) -> std::io::Result<Option<PathBuf>> {
     let Some(path) = plugin_path(server_dir) else { return Ok(None) };
+    // A key first, for a server that runs without one (started before DropLaunch was updated):
+    // the plugin prints its lines with it.
+    if read_key(server_dir).is_none() {
+        new_key(server_dir)?;
+    }
     if std::fs::read_to_string(&path).is_ok_and(|text| text == PLUGIN) {
         return Ok(Some(path));
     }
@@ -312,13 +387,16 @@ struct MapRef {
 
 /// "RaceTrack_v19" -> "RaceTrack": versions of a map share their reports.
 fn without_version(stem: &str) -> &str {
-    static VERSION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)[\s_.\-]*v\d+(?:[._]\d+)*$").unwrap());
-    let base = VERSION.replace(stem, "");
-    let base = base.trim_end_matches([' ', '_', '-', '.']);
-    if base.is_empty() {
+    static VERSION: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)([\s_.\-]*)v\d+(?:[._]\d+)*$").unwrap());
+    let Some(found) = VERSION.captures(stem) else { return stem };
+    let base = stem[..found.get(0).map_or(stem.len(), |m| m.start())].trim_end_matches([' ', '_', '-', '.']);
+    // Without a space, _, - or . in front, the v may be part of a word: "Dev1" stays, "RaceDownv19"
+    // (a longer name) loses it.
+    let joined = found.get(1).is_none_or(|m| m.is_empty());
+    if base.is_empty() || (joined && base.chars().count() < 3) {
         stem
     } else {
-        &stem[..base.len()]
+        base
     }
 }
 
@@ -722,8 +800,8 @@ impl Playtest {
         if st.server.as_ref().map(|s| s.id) != Some(server_id) {
             return;
         }
-        match reply {
-            Ok(text) => match serde_json::from_str::<PlayersReply>(text.trim()) {
+        if let Ok(text) = reply {
+            match serde_json::from_str::<PlayersReply>(text.trim()) {
                 Ok(r) => {
                     st.answered = true;
                     st.players = r.players;
@@ -739,8 +817,7 @@ impl Playtest {
                     st.answered = false;
                     st.players.clear();
                 }
-            },
-            Err(_) => {}
+            }
         }
     }
 
@@ -981,12 +1058,77 @@ mod tests {
 
     #[test]
     fn reports_are_found_in_log_lines() {
-        let line = r#"[DropLaunch] DLBUG1 {"id":"1","name":"Ted","grid":"G12","text":"floating rock"}"#;
-        let json = report_json(line).unwrap();
+        let key = Some("k3y");
+        let line = r#"[DropLaunch] DLBUG1 k3y {"id":"1","name":"Ted","grid":"G12","text":"floating rock"}"#;
+        let json = report_json(line, key).unwrap();
         assert!(json.starts_with('{'));
         assert_eq!(describe(json), "Bug report from Ted at G12: floating rock");
-        assert_eq!(report_json("[CHAT] Ted : DLBUG1 hello"), None);
-        assert_eq!(report_json("Loaded plugin DropLaunch v1.3.0 by DropLaunch"), None);
+        assert_eq!(report_json("[CHAT] Ted : DLBUG1 hello", key), None);
+        assert_eq!(report_json("Loaded plugin DropLaunch v1.3.0 by DropLaunch", key), None);
+        // Carbon's own log, and the plugin's older name.
+        assert!(report_json(r#"[2026.10.13 01:01:16] [INFO] [DropLaunch] DLBUG1 k3y {"id":"1"}"#, key).is_some());
+        assert!(report_json(r#"[DropLaunch Playtest] DLBUG1 k3y {"id":"1"}"#, key).is_some());
+        // Typed in the chat: a report from anyone, in anyone's name. Not the plugin's.
+        let forged = r#"[CHAT] Mallory[76561198000000002] : DLBUG1 k3y {"id":"forged-1","steamId":"76561198000000001","name":"The Owner","text":"fake report","grid":"A1"}"#;
+        assert_eq!(report_json(forged, key), None);
+        assert_eq!(report_json(r#"[CHAT] Mallory[76561198000000002] : [DropLaunch] DLBUG1 k3y {"id":"x"}"#, key), None);
+        assert_eq!(report_json(r#"[TEAM CHAT] Mallory[76561198000000002] : [DropLaunch] DLBUG1 k3y {"id":"x"}"#, key), None);
+        assert_eq!(report_json(r#"[TEAM CHAT] [M[76561198000000002] : [DropLaunch] DLBUG1 k3y {"id":"x"}"#, key), None);
+        // A real report may mention the chat.
+        assert!(report_json(r#"[DropLaunch] DLBUG1 k3y {"id":"2","text":"the [CHAT] box covers the map"}"#, key).is_some());
+    }
+
+    /// Second sweep, H1: a player named `[DropLaunch] DLBUG1 {"a":"` types the rest in the chat,
+    /// and the line starts just like the plugin's. Without the key it's nobody's report; an old
+    /// plugin's line (no key) or another start's key doesn't count either.
+    #[test]
+    fn a_player_name_cannot_pass_for_the_plugin() {
+        let key = Some("Abc123");
+        let forged = r#"[CHAT] [DropLaunch] DLBUG1 {"a":"[76561198000000002] : ","id":"forged-1","steamId":"76561198000000001","name":"The Owner","text":"fake report","grid":"A1"}"#;
+        assert_eq!(report_json(forged, key), None);
+        assert!(crate::kits::game_kit_json(&forged.replace("DLBUG1", "DLKITSAVE1"), key).is_none());
+        assert!(has_marker(forged) && !is_plugin_line(forged, key));
+        let old = r#"[DropLaunch] DLBUG1 {"id":"1","text":"from an older plugin"}"#;
+        assert_eq!(report_json(old, key), None);
+        let other = r#"[DropLaunch] DLBUG1 Other999 {"id":"1"}"#;
+        assert_eq!(report_json(other, key), None);
+        // The key must be the whole word: not a longer or shorter one that starts the same.
+        assert_eq!(report_json(r#"[DropLaunch] DLBUG1 Abc1234 {"id":"1"}"#, key), None);
+        assert_eq!(report_json(r#"[DropLaunch] DLBUG1 Abc12 {"id":"1"}"#, key), None);
+        // No key known for the server: nothing counts.
+        assert_eq!(report_json(r#"[DropLaunch] DLBUG1 Abc123 {"id":"1"}"#, None), None);
+        assert_eq!(report_json(r#"[DropLaunch] DLBUG1  {"id":"1"}"#, Some("")), None);
+        let real = r#"[2026.11.04 20:15:02] [INFO] [DropLaunch] DLBUG1 Abc123 {"id":"1","text":"ok"}"#;
+        assert_eq!(report_json(real, key), Some(r#"{"id":"1","text":"ok"}"#));
+        assert!(is_plugin_line(real, key));
+        assert!(!has_marker("[CHAT] Ted[1] : hello"));
+    }
+
+    /// The key goes where the running framework's plugin reads it; a new one at every start, and
+    /// putting the plugin in keeps a key that's there.
+    #[test]
+    fn the_key_is_in_the_frameworks_data_folder() {
+        let dir = std::env::temp_dir().join(format!("droplaunch-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(new_key(&dir).unwrap(), None, "no Carbon or Oxide: no key");
+        assert_eq!(read_key(&dir), None);
+        std::fs::create_dir_all(dir.join("carbon/managed")).unwrap();
+        std::fs::write(dir.join("carbon/managed/Carbon.dll"), b"").unwrap();
+        // A server that ran without one gets one with the plugin.
+        install_plugin(&dir).unwrap();
+        let first = read_key(&dir).expect("a key with the plugin");
+        assert!(dir.join("carbon/data/DropLaunch/key.json").is_file());
+        assert_eq!(first.len(), 24);
+        install_plugin(&dir).unwrap();
+        assert_eq!(read_key(&dir).as_deref(), Some(first.as_str()), "kept when the plugin goes in again");
+        let second = new_key(&dir).unwrap().unwrap();
+        assert_ne!(first, second);
+        assert_eq!(read_key(&dir), Some(second));
+        // Something else in the file isn't a key.
+        std::fs::write(dir.join("carbon/data/DropLaunch/key.json"), r#"{"key":"a b"}"#).unwrap();
+        assert_eq!(read_key(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -996,6 +1138,11 @@ mod tests {
         assert_eq!(without_version("my map v1.2"), "my map");
         assert_eq!(without_version("RedditMaps 4000"), "RedditMaps 4000");
         assert_eq!(without_version("v2"), "v2");
+        // A v that belongs to a short word stays.
+        assert_eq!(without_version("Dev1"), "Dev1");
+        assert_eq!(without_version("Nav3"), "Nav3");
+        assert_eq!(without_version("Island_v2"), "Island");
+        assert_eq!(without_version("Mapv2"), "Map");
         assert_eq!(book_key("My Map: 2"), "my_map__2");
         assert_eq!(book_key("???"), "map");
     }

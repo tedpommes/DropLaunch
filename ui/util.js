@@ -12,7 +12,6 @@ export function el(tag, props = {}, ...children) {
     if (value == null || value === false) continue;
     if (key === "class") node.className = value;
     else if (key === "text") node.textContent = value;
-    else if (key === "html") node.innerHTML = value;
     else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
     else if (key === "dataset") Object.assign(node.dataset, value);
     else node.setAttribute(key, value === true ? "" : value);
@@ -123,6 +122,71 @@ export function confirmDialog({ title, text, ok = t("common.continue"), choices,
   });
 }
 
+// ---------------------------------------------------------------- windows over the page
+// The setup, welcome, Settings, update, map viewer, About and question windows (role="dialog"
+// aria-modal="true", shown by taking `hidden` off them or their overlay): one that comes up
+// without taking the focus itself gets it on its first control, Tab stays in the top one (and in
+// a guide tip over it), and when one closes, the focus goes back to where it was.
+const MODAL = '[aria-modal="true"]';
+const FOCUSABLE = 'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+/** dialog → what had the focus before it came into the dialog. */
+const focusBefore = new Map();
+let shownBefore = new Set();
+
+const shownDialogs = () => [...document.querySelectorAll(MODAL)].filter((d) => !d.closest("[hidden]"));
+const focusables = (root) => [...root.querySelectorAll(FOCUSABLE)].filter((n) => !n.disabled && n.tabIndex >= 0 && n.getClientRects().length > 0);
+const visibleTips = () => [...document.querySelectorAll(".guide-tip")].filter((tip) => tip.getClientRects().length > 0);
+
+/**
+ * A window that just came up: once its own code had its turn (most focus their main button
+ * themselves), the focus is in it or in a guide tip, or its first control gets it. So a keyboard
+ * user doesn't need a Tab first, and a screen reader starts in it.
+ */
+function focusShown(dialog) {
+  setTimeout(() => {
+    if (shownDialogs().at(-1) !== dialog) return; // closed again, or another came over it
+    const at = document.activeElement;
+    if ([dialog, ...visibleTips()].some((area) => area.contains(at))) return;
+    focusables(dialog)[0]?.focus({ preventScroll: true });
+  });
+}
+
+document.addEventListener("focusin", (e) => {
+  const dialog = e.target.closest?.(MODAL);
+  const from = e.relatedTarget;
+  if (dialog && from && !dialog.contains(from) && !focusBefore.has(dialog)) focusBefore.set(dialog, from);
+});
+
+new MutationObserver(() => {
+  const shown = new Set(shownDialogs());
+  for (const dialog of shownBefore) {
+    if (shown.has(dialog)) continue;
+    const back = focusBefore.get(dialog);
+    focusBefore.delete(dialog);
+    const at = document.activeElement;
+    // Unless something else took the focus already (Settings gives it to its button itself).
+    if (back?.isConnected && (!at || at === document.body || dialog.contains(at))) back.focus({ preventScroll: true });
+  }
+  for (const dialog of shown) if (!shownBefore.has(dialog)) focusShown(dialog);
+  shownBefore = shown;
+}).observe(document.body, { subtree: true, attributes: true, attributeFilter: ["hidden"] });
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Tab" || e.defaultPrevented) return;
+  const top = shownDialogs().at(-1); // the later one in the page is the one in front
+  if (!top) return;
+  const tips = visibleTips();
+  const items = [top, ...tips].flatMap(focusables);
+  const at = document.activeElement;
+  const inside = [top, ...tips].some((area) => area.contains(at));
+  if (!items.length) return e.preventDefault();
+  const [first, last] = [items[0], items.at(-1)];
+  if (!inside || (!e.shiftKey && at === last) || (e.shiftKey && at === first)) {
+    e.preventDefault();
+    (e.shiftKey ? last : first).focus();
+  }
+});
+
 /** "C:" for a Windows path (null when it can't tell). */
 export function driveOf(path) {
   const match = /^([A-Za-z]:)/.exec(path ?? "");
@@ -150,22 +214,61 @@ const fitObserver =
         for (const entry of entries) for (const node of fitted.get(entry.target)?.nodes ?? [entry.target]) fitNow(node);
       })
     : null;
+/**
+ * What the observer watches. An observer keeps its elements alive, and one taken off the page
+ * gets no more callbacks, so `sweep` lets go of the ones a re-render replaced.
+ */
+const watching = new Set();
+/** A label still being built is off the page for a moment at most. */
+const BUILDING_MS = 1000;
+
+function watch(node) {
+  if (!fitObserver || watching.has(node)) return;
+  watching.add(node);
+  fitObserver.observe(node);
+}
+
+function unwatch(node) {
+  fitObserver?.unobserve(node);
+  watching.delete(node);
+}
+
+/**
+ * Off the page for good: it was laid out once (so it was on the page), or it was made more than a
+ * second ago and never put on it (replaced before its first layout). Not one still being built.
+ */
+function gone(node, now) {
+  if (node.isConnected) return false;
+  const job = fitted.get(node);
+  return Boolean(job?.seen) || now - (job?.at ?? 0) > BUILDING_MS;
+}
+
+/** Lets go of what was on the page and isn't any more. */
+function sweep() {
+  const now = performance.now();
+  for (const node of watching) {
+    const job = fitted.get(node);
+    if (gone(node, now)) unwatch(node);
+    else if (job?.nodes) job.nodes = job.nodes.filter((n) => !gone(n, now));
+  }
+}
 
 function fitNow(node) {
   const job = fitted.get(node);
   if (!job?.path) return;
   if (!node.isConnected) {
-    fitObserver?.unobserve(node);
+    unwatch(node);
     return;
   }
+  job.seen = true;
   if (!node.clientWidth) return;
   // The box that limits the width, when the node itself is only as wide as its text.
   const box = job.box?.(node);
   if (box) {
     const watched = fitted.get(box);
     if (!watched) {
-      fitted.set(box, { nodes: [node] });
-      fitObserver?.observe(box);
+      fitted.set(box, { nodes: [node], seen: true });
+      watch(box);
     } else if (!watched.nodes.includes(node)) watched.nodes.push(node);
   }
   for (const text of pathShortenings(job.path)) {
@@ -180,9 +283,10 @@ function fitNow(node) {
  * and nowrap (its text-overflow ellipsis is the last resort). `box(node)`: the element that limits it.
  */
 export function fitPath(node, path, { before = "", box } = {}) {
-  fitted.set(node, { path, before, box });
+  sweep();
+  fitted.set(node, { path, before, box, at: performance.now() });
   node.textContent = before + path;
-  fitObserver?.observe(node);
+  watch(node);
   return node;
 }
 

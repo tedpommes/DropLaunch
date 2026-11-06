@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use crate::sync::Locked;
 
 /// Sent to the UI ahead of the pixels: "DLM1", the picture's size and the world's (u32 each).
@@ -82,22 +82,69 @@ pub fn picture(path: &Path) -> Result<Arc<Picture>, String> {
     Ok(pic)
 }
 
-/// A small picture for the map list (to_bytes form), kept in `cache_dir` per version of the file.
+/// The thumbnail cache, in the data folder.
+pub const CACHE_DIR: &str = "Thumbs";
+/// Pictures in the thumbnail cache that weren't shown for this long are removed at start.
+const THUMBNAIL_DAYS: u64 = 30;
+const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// A small picture for the map list (to_bytes form), kept in `cache_dir` per version of the file:
+/// `<file>-<version>.dlm`. A new version of a map replaces its old picture.
 pub fn thumbnail(path: &Path, cache_dir: &Path) -> Result<Vec<u8>, String> {
     let (file, len, modified) = key_of(path)?;
     let stamp = modified.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis());
-    let id = blake3::hash(format!("{}|{len}|{stamp}", file.display().to_string().to_lowercase()).as_bytes()).to_hex();
-    let cached = cache_dir.join(format!("{}.dlm", &id[..24]));
+    let of_file = blake3::hash(file.display().to_string().to_lowercase().as_bytes()).to_hex();
+    let version = blake3::hash(format!("{len}|{stamp}").as_bytes()).to_hex();
+    let prefix = format!("{}-", &of_file[..16]);
+    let cached = cache_dir.join(format!("{prefix}{}.dlm", &version[..8]));
     if let Ok(bytes) = std::fs::read(&cached) {
         if bytes.len() == HEADER + THUMBNAIL * THUMBNAIL * 4 && bytes.starts_with(b"DLM1") {
+            mark_used(&cached);
             return Ok(bytes);
         }
     }
     let bytes = render_file(path, Some(THUMBNAIL))?.to_bytes();
-    if std::fs::create_dir_all(cache_dir).is_ok() {
-        let _ = std::fs::write(&cached, &bytes);
+    if std::fs::create_dir_all(cache_dir).is_ok() && std::fs::write(&cached, &bytes).is_ok() {
+        for old in cache_files(cache_dir) {
+            if old != cached && old.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(&prefix)) {
+                let _ = std::fs::remove_file(old);
+            }
+        }
     }
     Ok(bytes)
+}
+
+/// A picture that is shown counts as new again, so `prune_thumbnails` keeps it (at most one
+/// write a day per picture).
+fn mark_used(file: &Path) {
+    let old = std::fs::metadata(file).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|age| age > DAY));
+    if old {
+        if let Ok(f) = std::fs::File::options().write(true).open(file) {
+            let _ = f.set_modified(SystemTime::now());
+        }
+    }
+}
+
+fn cache_files(cache_dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(cache_dir)
+        .map(|dir| dir.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("dlm"))).collect())
+        .unwrap_or_default()
+}
+
+/// Once at start: remove the pictures not shown for `THUMBNAIL_DAYS`, and the ones named the
+/// way older versions named them (one per version of a map, never removed). How many went.
+pub fn prune_thumbnails(cache_dir: &Path) -> usize {
+    let mut removed = 0;
+    for file in cache_files(cache_dir) {
+        let older_kind = file.file_stem().and_then(|n| n.to_str()).is_some_and(|n| !n.contains('-'));
+        let unused = std::fs::metadata(&file)
+            .and_then(|m| m.modified())
+            .is_ok_and(|t| t.elapsed().is_ok_and(|age| age > DAY * THUMBNAIL_DAYS as u32));
+        if (older_kind || unused) && std::fs::remove_file(&file).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// The newest .map file in a folder (the server writes the procedural map into its identity's).
@@ -483,6 +530,7 @@ fn parse_world(data: &[u8]) -> Option<World<'_>> {
 
 type C = [f32; 3];
 const START: C = [0.286, 0.271, 0.247];
+#[allow(clippy::approx_constant)] // A colour, not 1/pi.
 const WATER: C = [0.169, 0.318, 0.362];
 const OFFSHORE: C = [0.041, 0.221, 0.275];
 const GRAVEL: (C, f32) = ([0.25, 0.243, 0.220], 0.372);
@@ -584,6 +632,7 @@ fn draw(world: &World, height: &Grid, pixels: usize) -> Vec<u8> {
     };
     // Roads, rivers and rails, a little wider on bigger pictures.
     let width = (pixels / 1024) as isize;
+    let near = |p: &Vec3| p.x.is_finite() && p.z.is_finite() && p.x.abs() <= size && p.z.abs() <= size;
     for (name, nodes) in &world.paths {
         let color: [u8; 3] = if name.contains("river") {
             [70, 120, 150]
@@ -595,8 +644,13 @@ fn draw(world: &World, height: &Grid, pixels: usize) -> Vec<u8> {
             continue;
         };
         for w in nodes.windows(2) {
+            // A node far outside the world (a broken or made-up file) would take forever to walk to.
+            if !w.iter().all(near) {
+                continue;
+            }
             let (a, b) = (to_px(&w[0]), to_px(&w[1]));
-            let steps = ((b.0 - a.0).abs().max((b.1 - a.1).abs()) as usize).max(1);
+            // (Both ends near the world: never more than 2 * pixels apart.)
+            let steps = ((b.0 - a.0).abs().max((b.1 - a.1).abs()) as usize).clamp(1, pixels * 2);
             for s in 0..=steps {
                 let t = s as f32 / steps as f32;
                 let (x, y) = ((a.0 + (b.0 - a.0) * t) as isize, (a.1 + (b.1 - a.1) * t) as isize);
@@ -630,6 +684,11 @@ mod tests {
 
     /// A tiny world: a 4x4 heightmap, half above sea level.
     fn world_bytes() -> Vec<u8> {
+        world_with_road(None)
+    }
+
+    /// The tiny world with a road from the middle to `to` (x, z in metres).
+    fn world_with_road(to: Option<(f32, f32)>) -> Vec<u8> {
         fn varint(mut v: u64, out: &mut Vec<u8>) {
             loop {
                 let b = (v & 0x7f) as u8;
@@ -654,6 +713,21 @@ mod tests {
         varint(1 << 3, &mut world);
         varint(1000, &mut world);
         bytes_field(2, &map, &mut world);
+        if let Some((x, z)) = to {
+            let node = |x: f32, z: f32| {
+                let mut node = Vec::new();
+                for (field, v) in [(1u64, x), (3, z)] {
+                    varint(field << 3 | 5, &mut node);
+                    node.extend_from_slice(&v.to_bits().to_le_bytes());
+                }
+                node
+            };
+            let mut path = Vec::new();
+            bytes_field(1, b"Road 1", &mut path);
+            bytes_field(16, &node(0.0, 0.0), &mut path);
+            bytes_field(16, &node(x, z), &mut path);
+            bytes_field(4, &path, &mut world);
+        }
         // Stored uncompressed (flags 0).
         let mut file = 10u32.to_le_bytes().to_vec();
         file.extend_from_slice(&0i64.to_le_bytes());
@@ -724,6 +798,65 @@ mod tests {
             assert_eq!(lazy.size, whole.size, "{chunk}");
             assert_eq!(lazy.maps, whole.maps, "{chunk}");
         }
+    }
+
+    /// A road node far outside the world (1e30 m) is left out instead of walked to for ever.
+    #[test]
+    fn a_far_road_node_does_not_hang_the_picture() {
+        let road = |to| render(&world_with_road(Some(to)), Some(THUMBNAIL)).expect("picture").rgba;
+        assert_ne!(road((400.0, 0.0)), render(&world_bytes(), Some(THUMBNAIL)).unwrap().rgba, "the road is drawn");
+        for to in [(1e30, 0.0), (0.0, -1e9), (f32::INFINITY, 0.0), (f32::NAN, 0.0)] {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(road(to));
+            });
+            let pic = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap_or_else(|_| panic!("{to:?}: not drawn within 10 s"));
+            assert_eq!(pic, render(&world_bytes(), Some(THUMBNAIL)).unwrap().rgba, "{to:?}: the road is left out");
+        }
+    }
+
+    /// A new version of a map replaces its picture; pictures not shown for 30 days and the ones
+    /// older versions made go at start, the others stay.
+    #[test]
+    fn the_thumbnail_cache_keeps_one_picture_per_map() {
+        let dir = std::env::temp_dir().join(format!("droplaunch-thumbs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = dir.join("Thumbs");
+        std::fs::create_dir_all(&cache).unwrap();
+        let (a, b) = (dir.join("a.map"), dir.join("b.map"));
+        std::fs::write(&a, world_bytes()).unwrap();
+        std::fs::write(&b, world_bytes()).unwrap();
+        let first = thumbnail(&a, &cache).unwrap();
+        thumbnail(&b, &cache).unwrap();
+        assert_eq!(cache_files(&cache).len(), 2);
+        assert_eq!(thumbnail(&a, &cache).unwrap(), first, "from the cache");
+
+        // A re-export (a new time stamp): a's old picture goes, b's stays.
+        std::fs::File::options().write(true).open(&a).unwrap().set_modified(SystemTime::now() + DAY).unwrap();
+        thumbnail(&a, &cache).unwrap();
+        assert_eq!(cache_files(&cache).len(), 2);
+
+        // At start: the old kind and one unused for 31 days go; a picture shown again counts as new.
+        let names = |c: &Path| {
+            let mut n: Vec<String> = cache_files(c).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+            n.sort();
+            n
+        };
+        let before = names(&cache);
+        std::fs::write(cache.join("0123456789abcdef01234567.dlm"), b"DLM1").unwrap();
+        let month_ago = SystemTime::now() - DAY * 31;
+        for file in cache_files(&cache) {
+            std::fs::File::options().write(true).open(&file).unwrap().set_modified(month_ago).unwrap();
+        }
+        thumbnail(&b, &cache).unwrap(); // b's picture is shown again
+        std::fs::write(cache.join("notes.txt"), b"not a picture").unwrap();
+        assert_eq!(prune_thumbnails(&cache), 2);
+        let left = names(&cache);
+        assert_eq!(left.len(), 1);
+        assert!(before.contains(&left[0]));
+        assert!(cache.join("notes.txt").exists());
+        assert_eq!(prune_thumbnails(&dir.join("not there")), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

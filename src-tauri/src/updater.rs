@@ -224,7 +224,8 @@ pub fn launch(exe: &Path) -> Result<(), String> {
 }
 
 /// Started by an update: wait (a while) for the old DropLaunch to close, and take the
-/// `--after-update <pid>` arguments out. Leftovers of an earlier update are removed.
+/// `--after-update <pid>` arguments out. (The old exe stays until this one is up: see
+/// `remove_leftovers`.)
 pub fn after_update(args: &mut Vec<String>) {
     if let Some(i) = args.iter().position(|a| a == AFTER_UPDATE_ARG) {
         let pid = args.get(i + 1).and_then(|p| p.parse::<u32>().ok());
@@ -236,6 +237,12 @@ pub fn after_update(args: &mut Vec<String>) {
             }
         }
     }
+}
+
+/// What an update left: the version before (`DropLaunch.exe.old`) and an unfinished download.
+/// Removed once this version has its window up, not before: if the new one doesn't start (an
+/// antivirus took it, say), the old one is still there to go back to.
+pub fn remove_leftovers() {
     if let Ok(exe) = std::env::current_exe() {
         for leftover in [sibling(&exe, ".old"), sibling(&exe, ".download")] {
             let _ = std::fs::remove_file(leftover);

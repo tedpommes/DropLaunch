@@ -19,7 +19,7 @@ use crate::owner::{self, LocalAccount, SteamUser};
 use crate::platform;
 use crate::playtest::{self, mapview, MapNotes, Playtest, PlaytestView};
 use crate::server::{ConsoleLine, ServerManager, ServerView, StartContext, StartReply};
-use crate::startfile::{self, Layout, Target};
+use crate::startfile::{self, Chosen, Layout, Target, Use};
 use crate::sync::Locked;
 use crate::steamcmd::manifest::{self, InstalledServer};
 use crate::steamcmd::{appinfo, install, CancelToken};
@@ -27,7 +27,7 @@ use crate::toast::{self, Toast};
 use crate::updater::{self, Manifest, UpdateInfo};
 use crate::watcher::MapWatcher;
 use crate::whitelist;
-use crate::{lang, t};
+use crate::{lang, t, theme};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -63,7 +63,14 @@ impl AppState {
                 config.config.language = Some(language.code);
             }
         }
-        if !languages.is_empty() {
+        // Theme files likewise: added, the last one is used.
+        let (themes, files): (Vec<String>, Vec<String>) = files.into_iter().partition(|f| theme::is_theme_file(Path::new(f)));
+        for file in &themes {
+            if let Ok(theme) = theme::import(Path::new(file), &config.data) {
+                config.config.theme = Some(theme.id);
+            }
+        }
+        if !languages.is_empty() || !themes.is_empty() {
             let _ = config.save();
         }
         let available = lang::list(&config.base, &config.data);
@@ -99,8 +106,13 @@ impl AppState {
         Ok((token, JobSlot(&self.job)))
     }
 
-    fn data_dir(&self) -> PathBuf {
+    pub fn data_dir(&self) -> PathBuf {
         self.store.locked().data.clone()
+    }
+
+    /// The window's storage (WebView2's user data), in the data folder.
+    pub fn webview_dir(&self) -> PathBuf {
+        self.data_dir().join(crate::config::WEBVIEW_DIR)
     }
 
     fn ensure_idle(&self) -> CmdResult<()> {
@@ -124,18 +136,40 @@ impl AppState {
         StartContext::from_store(&self.store.locked())
     }
 
-    /// Existing installs get update_server.bat too (it's written by setup and updates).
-    pub fn ensure_scripts(&self) {
+    /// The start files of yours chosen for the procedural map and for custom maps (their names).
+    fn chosen_start_files(&self) -> (Option<String>, Option<String>) {
         let store = self.store.locked();
-        let steamcmd_dir = store.steamcmd_dir();
-        if !install::is_installed(&steamcmd_dir) {
-            return;
-        }
-        for (server_dir, server) in store.installs() {
-            if !server_dir.join(startfile::UPDATE_SCRIPT).is_file() {
-                let layout = Layout { base: &store.base, server_dir: &server_dir, steamcmd_dir: &steamcmd_dir };
-                let _ = startfile::write_update_script(&layout, &server.branch);
+        (store.config.procgen_start_file.clone(), store.config.maps_start_file.clone())
+    }
+
+    /// The update scripts, with the update settings as they are: update_rust_server.bat in the
+    /// SteamCMD folder (every installed branch's folder) and update_server.bat in each server
+    /// folder. At start, after setup and updates, and when a folder or the setting changes; a
+    /// file is only written when its text changed. Not before setup linked the folders.
+    pub fn write_update_scripts(&self) {
+        let (base, steamcmd_dir, servers, update_framework) = {
+            let store = self.store.locked();
+            let steamcmd_dir = store.steamcmd_dir();
+            if !store.config.linked || !install::is_installed(&steamcmd_dir) {
+                return;
             }
+            let mut servers: Vec<(PathBuf, String)> = store.installs().into_iter().map(|(dir, server)| (dir, server.branch)).collect();
+            // None downloaded yet (setup stopped): the folder setup downloads into.
+            if servers.is_empty() {
+                servers.push((store.server_dir(), store.config.branch.clone()));
+            }
+            (store.base.clone(), steamcmd_dir, servers, store.config.update_framework)
+        };
+        for (server_dir, branch) in &servers {
+            if server_dir.is_dir() {
+                let layout = Layout { base: &base, server_dir, steamcmd_dir: &steamcmd_dir };
+                if let Err(e) = startfile::write_update_script(&layout, branch, update_framework) {
+                    crate::log::write(&format!("{}: {e}", server_dir.join(startfile::UPDATE_SCRIPT).display()));
+                }
+            }
+        }
+        if let Err(e) = startfile::write_steamcmd_update_script(&base, &steamcmd_dir, &servers, update_framework) {
+            crate::log::write(&format!("{}: {e}", steamcmd_dir.join(startfile::STEAMCMD_UPDATE_SCRIPT).display()));
         }
     }
 }
@@ -180,6 +214,24 @@ pub struct InstallInfo {
     active: bool,
 }
 
+/// The procedural map's seed and size, and the start file of yours they come from (None:
+/// DropLaunch's own).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcgenInfo {
+    seed: String,
+    size: String,
+    file: Option<String>,
+}
+
+impl ProcgenInfo {
+    /// DropLaunch's seed and size: a start file of yours chosen for it gives everything else.
+    fn read(store: &ConfigStore) -> Self {
+        let chosen = store.chosen_start_file(Use::Procgen).and_then(|path| Chosen::read(&path, Use::Procgen));
+        Self { seed: startfile::SEED.to_string(), size: startfile::WORLD_SIZE.to_string(), file: chosen.map(|c| c.file_name()) }
+    }
+}
+
 /// A DropLaunch start file next to the server.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -202,6 +254,8 @@ pub struct Snapshot {
     /// of its own on the welcome screen.
     busy_place: Option<&'static str>,
     config_file: String,
+    /// DropLaunch-data (or where the data is instead): the settings and everything else it keeps.
+    data_dir: String,
     config_warning: Option<String>,
     folders: Vec<Folder>,
     steamcmd_installed: bool,
@@ -228,7 +282,11 @@ pub struct Snapshot {
     oxide_inactive: bool,
     /// The procedural map's start file, once made.
     start_file: Option<String>,
+    /// The procedural map as it starts.
+    procgen: ProcgenInfo,
     update_script: Option<String>,
+    /// update_rust_server.bat in the SteamCMD folder.
+    steamcmd_update_script: Option<String>,
     /// Every DropLaunch start_*.bat next to the server.
     start_files: Vec<StartFileInfo>,
     connect_command: String,
@@ -294,6 +352,7 @@ fn read_snapshot(store: &ConfigStore, busy: bool, live_dir: Option<PathBuf>) -> 
     let server = manifest::read_installed(&server_dir).filter(|_| linked);
     let procgen = startfile::read(&startfile::path_for(&server_dir, &Target::Procgen, false)).filter(|_| linked);
     let update_script = server_dir.join(startfile::UPDATE_SCRIPT);
+    let steamcmd_update_script = steamcmd.join(startfile::STEAMCMD_UPDATE_SCRIPT);
     let space_probe = existing_ancestor(&server_dir);
     Snapshot {
         version: env!("CARGO_PKG_VERSION"),
@@ -302,6 +361,7 @@ fn read_snapshot(store: &ConfigStore, busy: bool, live_dir: Option<PathBuf>) -> 
         base_dir: store.base.display().to_string(),
         busy_place: platform::busy_place(&store.base),
         config_file: store.file.display().to_string(),
+        data_dir: store.data.display().to_string(),
         config_warning: store.load_error.as_ref().map(|e| e.describe()),
         folders: vec![
             folder("steamcmd", t!("setup.req.steamcmd"), &steamcmd),
@@ -322,14 +382,14 @@ fn read_snapshot(store: &ConfigStore, busy: bool, live_dir: Option<PathBuf>) -> 
         oxide_inactive: linked && mods::oxide_needs_reapply(&server_dir),
         connect_command: procgen.as_ref().map_or_else(|| format!("client.connect 127.0.0.1:{}", startfile::DEFAULT_PORT), |s| s.connect_command()),
         start_file: procgen.map(|s| s.path.display().to_string()),
+        procgen: ProcgenInfo::read(store),
         update_script: (linked && update_script.is_file()).then(|| update_script.display().to_string()),
+        steamcmd_update_script: (linked && steamcmd_update_script.is_file()).then(|| steamcmd_update_script.display().to_string()),
         start_files: startfile::list(&server_dir)
             .into_iter()
-            .filter(|_| linked)
-            .into_iter()
-            .filter(|s| s.made_by_droplaunch())
+            .filter(|s| linked && s.made_by_droplaunch())
             .map(|s| {
-                let target = s.map.clone().map_or(Target::Procgen, Target::Map);
+                let target = startfile::target_of(&s, &server_dir);
                 StartFileInfo {
                     prefab: startfile::is_prefab_file(&server_dir, &target, &s.path),
                     map: s.map.as_deref().map(startfile::map_title),
@@ -403,6 +463,8 @@ pub async fn set_folder(state: State<'_, AppState>, key: String, path: String, b
     }
     if key == "maps" {
         state.watcher.watch(state.maps_dir());
+    } else {
+        state.write_update_scripts();
     }
     snapshot(&state).await
 }
@@ -507,7 +569,8 @@ pub struct GuidePatch {
 #[tauri::command]
 pub async fn set_options(state: State<'_, AppState>, options: OptionsPatch) -> CmdResult<Snapshot> {
     let whitelist_changed = options.whitelist.is_some() || options.whitelist_ids.is_some();
-    {
+    let scripts_changed = options.update_framework.is_some();
+    let server_dir = {
         let mut store = state.store.locked();
         if let Some(v) = options.auto_join {
             store.config.auto_join = v;
@@ -561,10 +624,12 @@ pub async fn set_options(state: State<'_, AppState>, options: OptionsPatch) -> C
             Guide::add(&mut guide.seen, patch.seen);
             Guide::add(&mut guide.done, patch.done);
         }
-        if let Some(on) = options.profiler {
-            mods::set_profiler(&store.server_dir(), on).map_err(|e| t!("error.profiler", error = e))?;
-        }
         save(&store)?;
+        store.server_dir()
+    };
+    // (Carbon's file, written without holding the settings.)
+    if let Some(on) = options.profiler {
+        mods::set_profiler(&server_dir, on).map_err(|e| t!("error.profiler", error = e))?;
     }
     if let Some(on) = options.playtest {
         let playtest = state.playtest.clone();
@@ -572,6 +637,9 @@ pub async fn set_options(state: State<'_, AppState>, options: OptionsPatch) -> C
     }
     if whitelist_changed {
         sync_whitelist(&state);
+    }
+    if scripts_changed {
+        state.write_update_scripts();
     }
     snapshot(&state).await
 }
@@ -595,7 +663,7 @@ fn sync_whitelist(state: &AppState) {
 /// shows again at the next start), the folders and installed branches kept. Nothing is deleted:
 /// the server files, maps, kits and bug reports stay; a deleted built-in kit comes back.
 #[tauri::command]
-pub async fn reset_settings(state: State<'_, AppState>) -> CmdResult<Snapshot> {
+pub async fn reset_settings(window: tauri::WebviewWindow, state: State<'_, AppState>) -> CmdResult<Snapshot> {
     // The server folders in use until now: they're let go of as they were set up.
     let (old_dirs, had_owner) = {
         let store = state.store.locked();
@@ -613,17 +681,20 @@ pub async fn reset_settings(state: State<'_, AppState>) -> CmdResult<Snapshot> {
         // The whitelist off there (a start file double-clicked later lets everyone in).
         let _ = whitelist::write(dir, None);
     }
-    {
+    let (base, data) = {
         let mut store = state.store.locked();
         let old = std::mem::take(&mut store.config);
         // Like a fresh DropLaunch: the default folders next to it, none of them linked until setup
         // runs again (it finds what's there). Only the branch list Steam gave is kept.
         store.config = Config { branch_cache: old.branch_cache, last_used: old.last_used, folder: old.folder, linked: false, legacy_drops: false, ..Config::default() };
         save(&store)?;
-        let languages = lang::list(&store.base, &store.data);
-        let _ = lang::activate(lang::choose(None, &languages));
-        let _ = std::fs::remove_file(store.data.join(kits::BUILT_IN_FILE));
-    }
+        (store.base.clone(), store.data.clone())
+    };
+    // (The language and theme files read, and the window dressed, without holding the settings.)
+    let languages = lang::list(&base, &data);
+    let _ = lang::activate(lang::choose(None, &languages));
+    theme::dress(&window, theme::choose(None, &theme::list(&data)));
+    let _ = std::fs::remove_file(data.join(kits::BUILT_IN_FILE));
     // The plugin out of a running server's folder (bug reports and the whitelist are off), and the
     // bug reports put aside: numbering starts at #1 again.
     state.playtest.sync_plugin();
@@ -693,13 +764,15 @@ pub async fn server_update(state: State<'_, AppState>, validate: bool, on_event:
             update_framework: store.config.update_framework,
         }
     };
-    tauri::async_runtime::spawn_blocking(move || {
+    let summary = tauri::async_runtime::spawn_blocking(move || {
         jobs::update_server(&req, &token, &mut |e| {
             let _ = on_event.send(e);
         })
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string());
+    state.write_update_scripts();
+    summary
 }
 
 /// Put Oxide back after an update replaced its files.
@@ -751,7 +824,7 @@ pub async fn setup_all(state: State<'_, AppState>, options: SetupOptions, on_eve
     let owner_store = state.store.clone();
     let extras_store = state.store.clone();
     let extras_dir = server_dir.clone();
-    let extras: Box<dyn Fn(&SetupOptions) -> Vec<String> + Send> = Box::new(move |opts: &SetupOptions| {
+    let extras: jobs::Extras = Box::new(move |opts: &SetupOptions| {
         let mut lines = Vec::new();
         let (plugin, whitelist) = {
             let mut store = extras_store.locked();
@@ -791,10 +864,12 @@ pub async fn setup_all(state: State<'_, AppState>, options: SetupOptions, on_eve
             steamcmd_dir: store.steamcmd_dir(),
             server_dir: server_dir.clone(),
             maps_dir: store.maps_dir(),
+            procgen_settings: store.chosen_start_file(Use::Procgen),
             options: live_options.clone(),
             owner: Box::new(move || owner_store.locked().config.owner.clone()),
             extras,
             launcher,
+            update_framework: store.config.update_framework,
         }
     };
     *state.setup_options.locked() = Some(live_options);
@@ -814,6 +889,7 @@ pub async fn setup_all(state: State<'_, AppState>, options: SetupOptions, on_eve
         store.config.linked = true;
         save(&store)?;
     }
+    state.write_update_scripts();
     result
 }
 
@@ -913,17 +989,64 @@ pub struct MapList {
     maps: Vec<MapEntry>,
     /// Maps that were started, newest first.
     history: Vec<MapEntry>,
+    /// Procedural map start files dropped on DropLaunch, newest first.
+    presets: Vec<PresetEntry>,
+}
+
+/// A procedural map's start file dropped on DropLaunch, in the map list: it starts with all its
+/// settings.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresetEntry {
+    /// The start file's name (e.g. start_server.bat).
+    name: String,
+    title: String,
+    seed: String,
+    size: String,
+    /// DropLaunch's copy of it (in the data folder).
+    copy: String,
+    /// The start file DropLaunch made for it in the server folder, once made.
+    start_file: Option<String>,
+    added: i64,
+}
+
+/// The procedural map start files dropped on DropLaunch, newest first.
+fn presets(data: &Path, server_dir: &Path) -> Vec<PresetEntry> {
+    let Ok(entries) = std::fs::read_dir(data.join(startfile::DROPPED_DIR)) else { return Vec::new() };
+    let mut out: Vec<PresetEntry> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter_map(|copy| {
+            let name = startfile::dropped_name(&copy)?;
+            let chosen = Chosen::preset(&copy)?;
+            let target = Target::Preset(name.clone());
+            let start_file = startfile::path_for(server_dir, &target, false);
+            Some(PresetEntry {
+                title: target.title(),
+                seed: chosen.value("server.seed").map_or_else(|| startfile::SEED.to_string(), str::to_string),
+                size: chosen.value("server.worldsize").map_or_else(|| startfile::WORLD_SIZE.to_string(), str::to_string),
+                start_file: start_file.is_file().then(|| start_file.display().to_string()),
+                // The copy is written again every time it's dropped.
+                added: std::fs::metadata(&copy).as_ref().map(modified_secs).unwrap_or(0),
+                copy: copy.display().to_string(),
+                name,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| b.added.cmp(&a.added).then_with(|| a.name.cmp(&b.name)));
+    out
 }
 
 #[tauri::command]
 pub async fn list_maps(state: State<'_, AppState>) -> CmdResult<MapList> {
-    let (maps_dir, server_dir, steamcmd_dir, history, linked) = {
+    let (maps_dir, server_dir, steamcmd_dir, history, linked, data) = {
         let store = state.store.locked();
-        (store.maps_dir(), store.server_dir(), store.steamcmd_dir(), store.config.history.clone(), store.config.linked)
+        (store.maps_dir(), store.server_dir(), store.steamcmd_dir(), store.config.history.clone(), store.config.linked, store.data.clone())
     };
     // Not linked (after Reset everything): no maps folder until setup has run.
     if !linked {
-        return Ok(MapList { maps_dir_exists: false, maps_dir: maps_dir.display().to_string(), maps: Vec::new(), history: Vec::new() });
+        let presets = presets(&data, &server_dir);
+        return Ok(MapList { maps_dir_exists: false, maps_dir: maps_dir.display().to_string(), maps: Vec::new(), history: Vec::new(), presets });
     }
     tauri::async_runtime::spawn_blocking(move || {
         // The setup makes it; once set up, a removed maps folder comes back. Before that (a first
@@ -941,7 +1064,8 @@ pub async fn list_maps(state: State<'_, AppState>) -> CmdResult<MapList> {
                 Some(entry)
             })
             .collect();
-        MapList { maps_dir_exists: maps_dir.is_dir(), maps_dir: maps_dir.display().to_string(), maps, history }
+        let presets = presets(&data, &server_dir);
+        MapList { maps_dir_exists: maps_dir.is_dir(), maps_dir: maps_dir.display().to_string(), maps, history, presets }
     })
     .await
     .map_err(|e| e.to_string())
@@ -957,8 +1081,19 @@ pub async fn import_files(state: State<'_, AppState>, paths: Vec<String>) -> Cmd
     let dropped = paths.clone();
     let dir = maps_dir.clone();
     let mut imported = tauri::async_runtime::spawn_blocking(move || maps::import(&paths, &maps_dir)).await.map_err(|e| e.to_string())?;
-    // A zip's .json files: the kits and language files go on to the UI, other files stay put.
-    imported.files.retain(|f| kits::read_kit(Path::new(f)).is_ok() || lang::is_language_file(Path::new(f)));
+    // A zip's start files that aren't its maps': kept like start files dropped on DropLaunch.
+    let chosen = state.chosen_start_files();
+    for (zip, name, text) in std::mem::take(&mut imported.scripts) {
+        match startfile::keep_dropped(&data, &name, &text) {
+            Ok((copy, usage)) => {
+                assets::record(&data, &folder, assets::Kind::StartFile, &zip.join(&name), vec![copy.display().to_string()]);
+                imported.kept_start_files.push(kept(&copy, usage, &chosen));
+            }
+            Err(problem) => imported.problems.push(problem),
+        }
+    }
+    // A zip's .json files: the kits, theme and language files go on to the UI, other files stay put.
+    imported.files.retain(|f| kits::read_kit(Path::new(f)).is_ok() || theme::is_theme_file(Path::new(f)) || lang::is_language_file(Path::new(f)));
     // Kept for Settings (Dropped assets): the maps, and each zip with the maps it held.
     for path in &dropped {
         if maps::is_map(path) && path.is_file() {
@@ -999,6 +1134,8 @@ fn remember(store: &Mutex<ConfigStore>, map: &Path) {
 pub enum TargetArg {
     Procgen,
     Map { path: String },
+    /// A procedural map start file from the map list (its name).
+    Preset { name: String },
 }
 
 impl From<TargetArg> for Target {
@@ -1006,6 +1143,8 @@ impl From<TargetArg> for Target {
         match arg {
             TargetArg::Procgen => Target::Procgen,
             TargetArg::Map { path } => Target::Map(PathBuf::from(path)),
+            // Only a name: its copy is in the data folder.
+            TargetArg::Preset { name } => Target::Preset(Path::new(&name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
         }
     }
 }
@@ -1032,10 +1171,13 @@ pub async fn start_server(
     if !ignore_oxide && mods::oxide_needs_reapply(&ctx.server_dir) {
         return Ok(StartReply::OxideInactive);
     }
-    // Only maps that exist go in the history (a typo'd path doesn't).
+    // Only maps that exist go in the history (a typo'd path doesn't), and only when they start
+    // (not when another server runs and the UI asks first).
     if let Target::Map(map) = target.clone() {
         let reply = state.server.start(target, prefab, ctx, replace)?;
-        remember(&state.store, &map);
+        if matches!(reply, StartReply::Started { .. } | StartReply::Queued { .. }) {
+            remember(&state.store, &map);
+        }
         return Ok(reply);
     }
     state.server.start(target, prefab, ctx, replace)
@@ -1084,7 +1226,7 @@ pub async fn create_start_file(state: State<'_, AppState>, target: TargetArg) ->
     let target = Target::from(target);
     let layout = Layout { base: &ctx.base, server_dir: &ctx.server_dir, steamcmd_dir: &ctx.steamcmd_dir };
     let error = |e| t!("error.startFile", error = e);
-    let (normal, _) = startfile::ensure(&layout, &target, false).map_err(error)?;
+    let (normal, _) = startfile::ensure(&layout, &target, false, ctx.settings(&target)?.as_ref()).map_err(error)?;
     let _ = owner::apply(&ctx.server_dir, &normal.identity, ctx.owner.as_ref());
     let mut paths = vec![normal.path.display().to_string()];
     if matches!(target, Target::Map(_)) {
@@ -1126,11 +1268,16 @@ pub async fn set_owner(state: State<'_, AppState>, steam_id: Option<String>, nam
         save(&store)?;
         (store.server_dir(), previous)
     };
-    // Every server DropLaunch made, also for when its start file is double-clicked later.
+    // Every server DropLaunch made, also for when its start file is double-clicked later. One
+    // that can't be written doesn't stop the others (each takes the owner again when DropLaunch
+    // starts it); what went wrong is told at the end, after the rest is done.
     let identities: std::collections::BTreeSet<String> =
         startfile::list(&server_dir).into_iter().filter(|s| s.made_by_droplaunch()).map(|s| s.identity).collect();
+    let mut problems = Vec::new();
     for identity in identities {
-        owner::apply(&server_dir, &identity, owner.as_ref()).map_err(|e| t!("error.usersCfg", identity, error = e))?;
+        if let Err(e) = owner::apply(&server_dir, &identity, owner.as_ref()) {
+            problems.push(t!("error.usersCfg", identity, error = e));
+        }
     }
     // A running server takes it right away (it reads users.cfg only when it starts).
     if previous != owner {
@@ -1143,6 +1290,9 @@ pub async fn set_owner(state: State<'_, AppState>, steam_id: Option<String>, nam
     }
     // The whitelist lets the (new) owner in.
     sync_whitelist(&state);
+    if !problems.is_empty() {
+        return Err(problems.join("\n"));
+    }
     snapshot(&state).await
 }
 
@@ -1199,7 +1349,7 @@ pub async fn console_commands(state: State<'_, AppState>) -> CmdResult<Vec<concm
 const HISTORY_FILE: &str = "console-history.txt";
 const HISTORY_KEEP: usize = 200;
 
-/// Commands typed in the console before, oldest first (kept in the app data).
+/// Commands typed in the console before, oldest first (kept in the data folder).
 #[tauri::command]
 pub async fn console_history(state: State<'_, AppState>) -> CmdResult<Vec<String>> {
     let file = state.data_dir().join(HISTORY_FILE);
@@ -1312,6 +1462,127 @@ pub async fn export_language(app: AppHandle) -> CmdResult<Option<String>> {
     };
     std::fs::write(&path, lang::builtin_text()).map_err(|e| t!("error.save", file = path.display(), error = e))?;
     Ok(Some(path.display().to_string()))
+}
+
+// ---------------------------------------------------------------- themes
+
+/// The theme in use and the ones there are (each with every colour).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeState {
+    id: String,
+    themes: Vec<theme::Theme>,
+    /// Where dropped theme files are kept.
+    folder: String,
+}
+
+#[tauri::command]
+pub async fn theme_state(state: State<'_, AppState>) -> CmdResult<ThemeState> {
+    let (data, picked) = {
+        let store = state.store.locked();
+        (store.data.clone(), store.config.theme.clone())
+    };
+    let themes = theme::list(&data);
+    let id = theme::choose(picked.as_deref(), &themes).id.clone();
+    Ok(ThemeState { id, themes, folder: data.join(theme::FOLDER).display().to_string() })
+}
+
+/// Use another theme: the UI puts its colours on itself, the window's frame follows here.
+#[tauri::command]
+pub async fn set_theme(window: tauri::WebviewWindow, state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    // (The theme files read, and the window dressed, without holding the settings.)
+    let themes = theme::list(&state.data_dir());
+    let picked = themes.iter().find(|t| t.id == id).ok_or_else(|| t!("theme.error.unknown", id))?;
+    theme::dress(&window, picked);
+    let mut store = state.store.locked();
+    store.config.theme = Some(picked.id.clone());
+    save(&store)
+}
+
+#[derive(Serialize)]
+pub struct AddedThemes {
+    added: Vec<theme::Theme>,
+    /// The files that aren't theme files (language files, most likely).
+    rest: Vec<String>,
+    problems: Vec<String>,
+}
+
+/// Theme files dropped on the window (or on the exe while DropLaunch runs).
+#[tauri::command]
+pub async fn add_themes(state: State<'_, AppState>, paths: Vec<String>) -> CmdResult<AddedThemes> {
+    let data = state.data_dir();
+    let mut out = AddedThemes { added: Vec::new(), rest: Vec::new(), problems: Vec::new() };
+    for path in paths {
+        if !theme::is_theme_file(Path::new(&path)) {
+            out.rest.push(path);
+            continue;
+        }
+        match theme::import(Path::new(&path), &data) {
+            Ok(theme) => out.added.push(theme),
+            Err(e) => out.problems.push(e),
+        }
+    }
+    Ok(out)
+}
+
+/// An added theme taken out (its copy in the Themes folder); Default again when it was in use.
+#[tauri::command]
+pub async fn remove_theme(window: tauri::WebviewWindow, state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    // (The theme files read and removed, and the window dressed, without holding the settings.)
+    let themes = theme::list(&state.data_dir());
+    let Some(file) = themes.iter().find(|t| t.id == id && t.source == theme::Source::Added).and_then(|t| t.file.clone()) else {
+        return Err(t!("theme.error.unknown", id));
+    };
+    std::fs::remove_file(&file).map_err(|e| t!("theme.error.save", error = e))?;
+    let in_use = {
+        let mut store = state.store.locked();
+        let in_use = store.config.theme.as_deref() == Some(id.as_str());
+        if in_use {
+            store.config.theme = None;
+            save(&store)?;
+        }
+        in_use
+    };
+    if in_use {
+        theme::dress(&window, theme::choose(None, &themes));
+    }
+    Ok(())
+}
+
+/// The folder dropped theme files are kept in (made when it isn't there yet).
+#[tauri::command]
+pub async fn open_themes_folder(state: State<'_, AppState>) -> CmdResult<()> {
+    let dir = state.data_dir().join(theme::FOLDER);
+    std::fs::create_dir_all(&dir).map_err(|e| t!("theme.error.save", error = e))?;
+    platform::open_in_file_manager(&dir).map_err(|e| e.to_string())
+}
+
+/// A theme as a file with every colour, to make your own from. None: cancelled.
+#[tauri::command]
+pub async fn save_theme(app: AppHandle, state: State<'_, AppState>, id: String) -> CmdResult<Option<String>> {
+    let themes = theme::list(&state.data_dir());
+    let picked = themes.iter().find(|t| t.id == id).ok_or_else(|| t!("theme.error.unknown", id))?;
+    let Some(path) = app
+        .dialog()
+        .file()
+        .set_title(t!("theme.save.dialog"))
+        .set_file_name(format!("DropLaunch theme - {}.json", picked.name.replace(['\\', '/', ':', '*', '?', '"', '<', '>', '|'], "")))
+        .add_filter(t!("theme.save.filter"), &["json"])
+        .blocking_save_file()
+        .and_then(|p| p.into_path().ok())
+    else {
+        return Ok(None);
+    };
+    std::fs::write(&path, theme::file_text(picked)).map_err(|e| t!("error.save", file = path.display(), error = e))?;
+    Ok(Some(path.display().to_string()))
+}
+
+impl AppState {
+    /// The window in the chosen theme's colours (before the page shows).
+    pub fn dress_window(&self, window: &tauri::WebviewWindow) {
+        let store = self.store.locked();
+        theme::dress(window, theme::choose(store.config.theme.as_deref(), &theme::list(&store.data)));
+    }
 }
 
 // ---------------------------------------------------------------- the Rust game's map cache
@@ -1458,7 +1729,7 @@ fn map_file(state: &AppState, path: Option<String>) -> CmdResult<PathBuf> {
 #[tauri::command]
 pub async fn map_thumbnail(state: State<'_, AppState>, path: Option<String>) -> CmdResult<tauri::ipc::Response> {
     let file = map_file(&state, path)?;
-    let cache = state.store.locked().data.join("Thumbs");
+    let cache = state.store.locked().data.join(mapview::CACHE_DIR);
     let bytes = tauri::async_runtime::spawn_blocking(move || mapview::thumbnail(&file, &cache)).await.map_err(|e| e.to_string())??;
     Ok(tauri::ipc::Response::new(bytes))
 }
@@ -1517,12 +1788,14 @@ pub async fn kits_load(state: State<'_, AppState>) -> CmdResult<Vec<kits::Kit>> 
     Ok(kits::load(&state.data_dir()))
 }
 
-/// The whole list as it is now (saved, made givable); what was saved.
+/// Kits that are new or changed (saved, made givable) and the ids of deleted ones; every kit, as
+/// the Kits folder has them now (also the ones copied in meanwhile).
 #[tauri::command]
-pub async fn kits_save(state: State<'_, AppState>, kits: Vec<kits::Kit>) -> CmdResult<Vec<kits::Kit>> {
+pub async fn kits_save(state: State<'_, AppState>, kits: Vec<kits::Kit>, removed: Vec<String>) -> CmdResult<Vec<kits::Kit>> {
     let kits: Vec<kits::Kit> = kits.into_iter().map(kits::clean).collect();
-    kits::save(&state.data_dir(), &kits).map_err(|e| format!("{e:#}"))?;
-    Ok(kits)
+    let data = state.data_dir();
+    kits::save(&data, &kits, &removed).map_err(|e| format!("{e:#}"))?;
+    Ok(kits::load(&data))
 }
 
 /// Rust's item list: from the running server when the DropLaunch plugin answers (and kept), else
@@ -1716,6 +1989,29 @@ pub struct AssetStartFile {
     settings: Vec<String>,
 }
 
+/// A start file dropped on DropLaunch (its copy).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetDroppedStartFile {
+    name: String,
+    path: String,
+    usage: Use,
+    /// The settings DropLaunch's start files take from it.
+    args: Vec<(String, String)>,
+    /// When it was dropped (or its copy written), seconds since 1970.
+    added: i64,
+}
+
+/// DropLaunch's own settings (without a start file of yours).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartDefaults {
+    seed: u32,
+    size: u32,
+    players: u32,
+    port: u16,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssetKit {
@@ -1735,6 +2031,11 @@ pub struct Assets {
     zips: Vec<AssetFile>,
     languages: Vec<AssetLanguage>,
     start_files: Vec<AssetStartFile>,
+    /// Start files dropped on DropLaunch, newest first, and the ones chosen (their names).
+    dropped_start_files: Vec<AssetDroppedStartFile>,
+    chosen_procgen: Option<String>,
+    chosen_maps: Option<String>,
+    start_defaults: StartDefaults,
     kits: Vec<AssetKit>,
     kits_dir: String,
 }
@@ -1746,9 +2047,19 @@ fn modified_secs(meta: &std::fs::Metadata) -> i64 {
 /// Everything dropped on DropLaunch by kind, with the start files and the kits (Settings).
 #[tauri::command]
 pub async fn assets_list(state: State<'_, AppState>) -> CmdResult<Assets> {
-    let (data, base, maps_dir, history, installs, folder, legacy) = {
+    let (data, base, maps_dir, history, installs, folder, legacy, chosen_procgen, chosen_maps) = {
         let store = state.store.locked();
-        (store.data.clone(), store.base.clone(), store.maps_dir(), store.config.history.clone(), store.installs(), store.config.folder.clone(), store.config.legacy_drops)
+        (
+            store.data.clone(),
+            store.base.clone(),
+            store.maps_dir(),
+            store.config.history.clone(),
+            store.installs(),
+            store.config.folder.clone(),
+            store.config.legacy_drops,
+            store.config.procgen_start_file.clone(),
+            store.config.maps_start_file.clone(),
+        )
     };
     tauri::async_runtime::spawn_blocking(move || {
         // What was dropped on this DropLaunch folder (not on a copy somewhere else).
@@ -1775,7 +2086,7 @@ pub async fn assets_list(state: State<'_, AppState>) -> CmdResult<Assets> {
                 maps.push(file(&h.path, h.started, Vec::new()));
             }
         }
-        maps.sort_by(|a, b| b.added.cmp(&a.added));
+        maps.sort_by_key(|m| std::cmp::Reverse(m.added));
         let zips = of(assets::Kind::Zip).map(|d| file(&d.path, d.added, d.made.clone())).collect();
         let added_at = |path: &Option<PathBuf>| {
             path.as_ref()
@@ -1790,22 +2101,45 @@ pub async fn assets_list(state: State<'_, AppState>) -> CmdResult<Assets> {
         let start_files = installs
             .iter()
             .flat_map(|(dir, server)| startfile::list(dir).into_iter().map(move |sf| (sf, server.branch.clone(), dir.clone())))
-            .map(|(sf, branch, dir)| AssetStartFile {
-                // The file Start uses for its map (others, like an older start_rust_server.bat, aren't).
-                own: {
-                    let target = sf.map.clone().map_or(Target::Procgen, Target::Map);
-                    startfile::path_for(&dir, &target, sf.prefab_mode) == sf.path
-                },
-                settings: std::fs::read_to_string(&sf.path).map(|text| startfile::settings_of(&text)).unwrap_or_default(),
-                name: sf.file_name(),
-                map_name: sf.map.as_deref().map(startfile::map_title).unwrap_or_else(|| t!("maps.procgen.name")),
-                map: sf.map.as_ref().map(|p| p.display().to_string()),
-                prefab: sf.prefab_mode,
-                modified: std::fs::metadata(&sf.path).as_ref().map(modified_secs).unwrap_or(0),
-                path: sf.path.display().to_string(),
-                branch,
+            .map(|(sf, branch, dir)| {
+                let target = startfile::target_of(&sf, &dir);
+                // The files Start uses for its map (others, like an older start_rust_server.bat, aren't).
+                let own = sf.made_by_droplaunch() && [false, true].iter().any(|&prefab| startfile::same_path(&startfile::path_for(&dir, &target, prefab), &sf.path));
+                AssetStartFile {
+                    prefab: if own { startfile::is_prefab_file(&dir, &target, &sf.path) } else { sf.prefab_mode },
+                    own,
+                    settings: std::fs::read_to_string(&sf.path).map(|text| startfile::settings_of(&text)).unwrap_or_default(),
+                    name: sf.file_name(),
+                    map_name: target.title(),
+                    map: sf.map.as_ref().map(|p| p.display().to_string()),
+                    modified: std::fs::metadata(&sf.path).as_ref().map(modified_secs).unwrap_or(0),
+                    path: sf.path.display().to_string(),
+                    branch,
+                }
             })
             .collect();
+        // DropLaunch's copies of the start files dropped on it (dropped on any DropLaunch folder:
+        // like kits, they're kept in the data folder).
+        let mut dropped_start_files: Vec<AssetDroppedStartFile> = std::fs::read_dir(data.join(startfile::DROPPED_DIR))
+            .map(|entries| entries.flatten().map(|e| e.path()).collect::<Vec<_>>())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|p| {
+                let name = startfile::dropped_name(&p)?;
+                let text = startfile::read_script(&p)?;
+                let usage = startfile::use_of(&text)?;
+                let copy = p.display().to_string();
+                let modified = std::fs::metadata(&p).as_ref().map(modified_secs).unwrap_or(0);
+                Some(AssetDroppedStartFile {
+                    name,
+                    added: dropped.iter().find(|d| d.kind == assets::Kind::StartFile && d.made.iter().any(|m| m.eq_ignore_ascii_case(&copy))).map_or(modified, |d| d.added),
+                    path: copy,
+                    args: startfile::settings_for(&text, false),
+                    usage,
+                })
+            })
+            .collect();
+        dropped_start_files.sort_by_key(|s| std::cmp::Reverse(s.added));
         let kits = kits::load_files(&data)
             .into_iter()
             .map(|(k, p)| AssetKit {
@@ -1817,7 +2151,18 @@ pub async fn assets_list(state: State<'_, AppState>) -> CmdResult<Assets> {
                 path: p.display().to_string(),
             })
             .collect();
-        Ok(Assets { maps, zips, languages, start_files, kits, kits_dir: data.join(kits::KITS_DIR).display().to_string() })
+        Ok(Assets {
+            maps,
+            zips,
+            languages,
+            start_files,
+            dropped_start_files,
+            chosen_procgen,
+            chosen_maps,
+            start_defaults: StartDefaults { seed: startfile::SEED, size: startfile::WORLD_SIZE, players: startfile::MAX_PLAYERS, port: startfile::DEFAULT_PORT },
+            kits,
+            kits_dir: data.join(kits::KITS_DIR).display().to_string(),
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1829,5 +2174,90 @@ pub async fn assets_forget(state: State<'_, AppState>, path: String) -> CmdResul
     assets::forget(&state.data_dir(), &path);
     let mut store = state.store.locked();
     store.config.history.retain(|h| !h.path.eq_ignore_ascii_case(&path));
+    save(&store)
+}
+
+#[derive(Serialize)]
+pub struct StartFilesAdded {
+    added: Vec<startfile::Kept>,
+    problems: Vec<String>,
+}
+
+/// What became of a start file DropLaunch kept a copy of (`chosen`: the names chosen for the
+/// procedural map and custom maps).
+fn kept(copy: &Path, usage: Use, chosen: &(Option<String>, Option<String>)) -> startfile::Kept {
+    let name = startfile::dropped_name(copy).unwrap_or_default();
+    let current = if usage == Use::Procgen { &chosen.0 } else { &chosen.1 };
+    startfile::Kept { in_use: current.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(&name)), name, usage }
+}
+
+/// Start files dropped on DropLaunch or its exe: a copy of each is kept (Settings lists them, to
+/// choose one for the procedural map or custom maps).
+#[tauri::command]
+pub async fn start_files_add(state: State<'_, AppState>, paths: Vec<String>) -> CmdResult<StartFilesAdded> {
+    let (data, folder) = {
+        let store = state.store.locked();
+        (store.data.clone(), store.config.folder.clone())
+    };
+    let chosen = state.chosen_start_files();
+    let mut out = StartFilesAdded { added: Vec::new(), problems: Vec::new() };
+    for path in paths {
+        let file = Path::new(&path);
+        match startfile::add_dropped(&data, file) {
+            Ok((copy, usage)) => {
+                assets::record(&data, &folder, assets::Kind::StartFile, file, vec![copy.display().to_string()]);
+                out.added.push(kept(&copy, usage, &chosen));
+            }
+            Err(problem) => out.problems.push(problem),
+        }
+    }
+    Ok(out)
+}
+
+/// One of DropLaunch's copies of a dropped start file, by its name (only a plain file name).
+fn dropped_start_file(state: &AppState, name: &str) -> CmdResult<PathBuf> {
+    if Path::new(name).file_name().is_none_or(|n| n != name) {
+        return Err(t!("startFiles.gone", name));
+    }
+    Ok(startfile::dropped_copy(&state.data_dir(), name))
+}
+
+/// The start file of yours DropLaunch's own take their settings from, for the procedural map or
+/// custom maps (`name` None: DropLaunch's own settings). Start files are made again at their next
+/// start.
+#[tauri::command]
+pub async fn start_file_use(state: State<'_, AppState>, usage: Use, name: Option<String>) -> CmdResult<()> {
+    if let Some(name) = &name {
+        let path = dropped_start_file(&state, name)?;
+        if Chosen::read(&path, usage).is_none() {
+            return Err(t!("startFiles.gone", name));
+        }
+    }
+    let mut store = state.store.locked();
+    match usage {
+        Use::Procgen => store.config.procgen_start_file = name,
+        Use::Maps => store.config.maps_start_file = name,
+    }
+    save(&store)
+}
+
+/// Remove DropLaunch's copy of a dropped start file (the file that was dropped stays). Where it
+/// was chosen, DropLaunch's own settings are used again.
+#[tauri::command]
+pub async fn start_file_forget(state: State<'_, AppState>, name: String) -> CmdResult<()> {
+    let path = dropped_start_file(&state, &name)?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(t!("startFiles.cantRemove", name, error = e)),
+    }
+    assets::forget_made(&state.data_dir(), &path.display().to_string());
+    let mut store = state.store.locked();
+    let config = &mut store.config;
+    for chosen in [&mut config.procgen_start_file, &mut config.maps_start_file] {
+        if chosen.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(&name)) {
+            *chosen = None;
+        }
+    }
     save(&store)
 }

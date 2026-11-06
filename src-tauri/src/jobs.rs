@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::mods::{self, Framework};
-use crate::startfile::{self, Layout, Target};
+use crate::startfile::{self, Chosen, Layout, Target, Use};
 use crate::sync::Locked;
 use crate::steamcmd::appinfo::{self, Branch};
 use crate::steamcmd::parser::{self, Signal};
@@ -259,7 +259,8 @@ fn ensure_steamcmd(dir: &Path, cancel: &CancelToken, s: &mut Session) -> Result<
 
 /// Install, update, switch branch or verify the Rust dedicated server; afterwards Carbon or Oxide
 /// is brought up to date when the build changed (if that's on), Oxide is put back if the update
-/// replaced its files, and update_server.bat follows the branch.
+/// replaced its files, and update_server.bat follows the branch (the SteamCMD folder's script is
+/// written afterwards, from every server folder).
 pub fn update_server(req: &UpdateRequest, cancel: &CancelToken, emit: &mut dyn FnMut(JobEvent)) -> JobSummary {
     let started = Instant::now();
     let mut s = Session::new(emit, t!("job.signedIn.check"));
@@ -290,7 +291,7 @@ pub fn update_server(req: &UpdateRequest, cancel: &CancelToken, emit: &mut dyn F
             }
             None => {}
         }
-        write_update_script(&req.layout(), &req.branch, &mut s);
+        write_update_script(&req.layout(), &req.branch, req.update_framework, &mut s);
     }
     s.finish(outcome, started)
 }
@@ -345,8 +346,8 @@ pub fn reapply_oxide(server_dir: &Path, cancel: &CancelToken, emit: &mut dyn FnM
     s.finish(outcome, started)
 }
 
-fn write_update_script(layout: &Layout, branch: &str, s: &mut Session) {
-    match startfile::write_update_script(layout, branch) {
+fn write_update_script(layout: &Layout, branch: &str, update_framework: bool, s: &mut Session) {
+    match startfile::write_update_script(layout, branch, update_framework) {
         Ok(path) => s.line(t!("job.wrote", file = path.display(), branch), LineSource::App),
         Err(e) => s.line(t!("job.writeFailed", file = startfile::UPDATE_SCRIPT, error = e), LineSource::Error),
     }
@@ -422,7 +423,7 @@ fn run_update(req: &UpdateRequest, cancel: &CancelToken, s: &mut Session) -> Out
         let after = manifest::read_installed(&req.server_dir);
         if let Some(inst) = after.filter(|i| i.fully_installed && i.branch == req.branch) {
             if s.success.is_some() || (s.error.is_none() && run.exit_code == Some(0)) {
-                let changed = before.as_ref().map_or(true, |b| b.buildid != inst.buildid || b.branch != inst.branch);
+                let changed = before.as_ref().is_none_or(|b| b.buildid != inst.buildid || b.branch != inst.branch);
                 let title = match () {
                     _ if req.validate => t!("job.done.verified"),
                     _ if before.is_none() => t!("job.done.installed"),
@@ -482,6 +483,9 @@ pub struct SetupOptions {
 /// Starts a server through DropLaunch's server manager; returns a short note.
 pub type Launcher = Box<dyn Fn(Target, bool) -> Result<String, String> + Send>;
 
+/// What the setup does after the framework step (see `extras` below).
+pub type Extras = Box<dyn Fn(&SetupOptions) -> Vec<String> + Send>;
+
 pub struct SetupRequest {
     pub base_dir: PathBuf,
     pub steamcmd_dir: PathBuf,
@@ -490,12 +494,16 @@ pub struct SetupRequest {
     /// The UI can still change the options (not the branch or the map) while SteamCMD downloads:
     /// each step reads what's chosen when it begins.
     pub options: Arc<Mutex<SetupOptions>>,
+    /// The start file of yours the procedural map's takes its settings from.
+    pub procgen_settings: Option<PathBuf>,
     /// The server owner as set right now (it can change during the download too).
     pub owner: Box<dyn Fn() -> Option<crate::owner::SteamUser> + Send>,
     /// Puts the bug report plugin and Carbon's profiler setting in place as chosen (after the
     /// framework step); lines for the log.
-    pub extras: Box<dyn Fn(&SetupOptions) -> Vec<String> + Send>,
+    pub extras: Extras,
     pub launcher: Launcher,
+    /// For update_server.bat: Carbon or Oxide with every server update.
+    pub update_framework: bool,
 }
 
 /// The one-click "fix": SteamCMD, server files, optional Carbon/Oxide (+ RustEdit), a procedural
@@ -522,9 +530,10 @@ fn run_setup(req: &SetupRequest, cancel: &CancelToken, s: &mut Session) -> Outco
     // The scripts come first: if the download fails or gets stuck, update_server.bat can do it
     // by hand (it also works without DropLaunch), and start_procgen_server.bat starts it after.
     let layout = Layout { base: &req.base_dir, server_dir: &req.server_dir, steamcmd_dir: &req.steamcmd_dir };
+    let chosen = req.procgen_settings.as_deref().and_then(|path| Chosen::read(path, Use::Procgen));
     if std::fs::create_dir_all(&req.server_dir).is_ok() {
-        let _ = startfile::ensure(&layout, &Target::Procgen, false);
-        write_update_script(&layout, &opts.branch, s);
+        let _ = startfile::ensure(&layout, &Target::Procgen, false, chosen.as_ref());
+        write_update_script(&layout, &opts.branch, req.update_framework, s);
     }
 
     s.task("server", TaskState::Active, "");
@@ -591,8 +600,8 @@ fn run_setup(req: &SetupRequest, cancel: &CancelToken, s: &mut Session) -> Outco
     }
 
     s.task("startfile", TaskState::Active, "");
-    let scripts = startfile::ensure(&layout, &Target::Procgen, false)
-        .and_then(|(start, _)| Ok((start, startfile::write_update_script(&layout, &opts.branch)?)));
+    let scripts = startfile::ensure(&layout, &Target::Procgen, false, chosen.as_ref())
+        .and_then(|(start, _)| Ok((start, startfile::write_update_script(&layout, &opts.branch, req.update_framework)?)));
     match scripts {
         Ok((start, update)) => {
             if let Some(owner) = (req.owner)() {

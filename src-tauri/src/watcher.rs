@@ -67,6 +67,8 @@ struct Inner {
     pending: HashMap<PathBuf, Instant>,
     list_changed: Option<Instant>,
     quiet: HashMap<PathBuf, Instant>,
+    /// Counts the folders asked for, so a slow walk of one that's no longer wanted is let go.
+    wanted: u64,
 }
 
 impl Default for MapWatcher {
@@ -113,12 +115,23 @@ impl MapWatcher {
 
     /// Watch `dir` (and its subfolders) from now on.
     pub fn watch(&self, dir: PathBuf) {
-        let old = {
+        let ticket = {
             let mut inner = self.inner.locked();
             if inner.dir.as_deref().is_some_and(|d| startfile::same_path(d, &dir)) && inner.watcher.is_some() {
                 return;
             }
-            inner.known = snapshot(&dir);
+            inner.wanted += 1;
+            inner.wanted
+        };
+        // What's in it now, walked without the lock (a big folder, or one on a network share, takes
+        // a while, and the watcher's own thread needs the lock meanwhile).
+        let known = snapshot(&dir);
+        let old = {
+            let mut inner = self.inner.locked();
+            if inner.wanted != ticket {
+                return; // another folder was picked meanwhile
+            }
+            inner.known = known;
             inner.pending.clear();
             inner.dir = Some(dir);
             let old = inner.watcher.take();
@@ -202,18 +215,22 @@ impl MapWatcher {
                 inner.list_changed.get_or_insert(now);
             }
         }
+        // It's there (again): what's in it now isn't news, but the list may have changed. (Walked
+        // after the lock is let go; saves wait for the next round, when it's known.)
+        let mut walk = None;
         if inner.retry_at.is_some_and(|t| now >= t) {
             self.start(&mut inner);
-            // It's there (again): what's in it now isn't news, but the list may have changed.
             if inner.watcher.is_some() {
-                if let Some(dir) = inner.dir.clone() {
-                    inner.known = snapshot(&dir);
-                }
+                walk = inner.dir.clone().map(|dir| (dir, inner.wanted));
                 inner.list_changed = Some(now);
             }
         }
         inner.quiet.retain(|_, t| now.duration_since(*t) < QUIET_FOR);
-        let ready: Vec<PathBuf> = inner.pending.iter().filter(|(_, t)| now.duration_since(**t) >= SETTLE).map(|(p, _)| p.clone()).collect();
+        let ready: Vec<PathBuf> = if walk.is_some() {
+            Vec::new()
+        } else {
+            inner.pending.iter().filter(|(_, t)| now.duration_since(**t) >= SETTLE).map(|(p, _)| p.clone()).collect()
+        };
         for path in ready {
             inner.pending.remove(&path);
             let Ok(meta) = std::fs::metadata(&path).map_err(drop).and_then(|m| if m.is_file() { Ok(m) } else { Err(()) }) else {
@@ -246,6 +263,13 @@ impl MapWatcher {
         drop(inner);
         // Dropped outside the lock (it waits for its thread).
         drop(gone);
+        if let Some((dir, ticket)) = walk {
+            let known = snapshot(&dir);
+            let mut inner = self.inner.locked();
+            if inner.wanted == ticket {
+                inner.known = known;
+            }
+        }
         out
     }
 }
@@ -324,15 +348,20 @@ mod tests {
         let out = wait_for(&watcher, &receiver);
         assert!(!out.is_empty() && out.iter().all(|c| c.saved.is_none()), "{out:?}");
 
-        // The folder deleted and made again: the watch starts over on the new one.
+        // The folder deleted and made again: the watch starts over on the new one. A map that's in
+        // it already isn't news; saved again later, it's a save of a map it knew.
         std::fs::remove_dir_all(&dir).unwrap();
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("kept.map"), b"there").unwrap();
         watcher.check_folder_soon();
         let out = wait_for(&watcher, &receiver);
         assert!(out.iter().all(|c| c.saved.is_none()), "{out:?}");
         std::fs::write(dir.join("again.map"), b"after").unwrap();
         let saved = wait_for(&watcher, &receiver).into_iter().find_map(|c| c.saved).expect("announced");
         assert_eq!((saved.name.as_str(), saved.new), ("again", true));
+        std::fs::write(dir.join("kept.map"), b"saved over").unwrap();
+        let saved = wait_for(&watcher, &receiver).into_iter().find_map(|c| c.saved).expect("announced");
+        assert_eq!((saved.name.as_str(), saved.new), ("kept", false));
         drop(watcher);
         let _ = std::fs::remove_dir_all(dir);
     }

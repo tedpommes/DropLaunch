@@ -1,7 +1,7 @@
 //! DropLaunch's texts. English is built in (`ui/lang/en.json`, the same file the UI reads), so
 //! nothing else is needed to start. Other languages are language files: one next to
 //! DropLaunch.exe is used by itself (unless another language was picked in Settings), and one
-//! dropped on the exe or the window is added (copied into the app data's Languages folder). A
+//! dropped on the exe or the window is added (copied into the data folder's Languages folder). A
 //! language file only needs the lines it changes: everything else stays English.
 //!
 //! A language file: `{"language": {"code": "nl", "name": "Nederlands"}, "strings": {"key": "text"}}`,
@@ -17,7 +17,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 /// ui/lang/en.json, compressed by build.rs.
 const BUILTIN_PACKED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/en.json.br"));
 pub const ENGLISH: &str = "en";
-/// Languages added by dropping a file on DropLaunch (in the app data folder).
+/// Languages added by dropping a file on DropLaunch (in the data folder).
 pub const FOLDER: &str = "Languages";
 
 /// The text in the language in use: `t!("key")`, or `t!("key", name = value, other)` for its
@@ -61,7 +61,7 @@ struct Meta {
 #[serde(rename_all = "camelCase")]
 pub enum Source {
     BuiltIn,
-    /// Dropped on DropLaunch (kept in the app data's Languages folder).
+    /// Dropped on DropLaunch (kept in the data folder's Languages folder).
     Added,
     /// Next to DropLaunch.exe.
     Folder,
@@ -245,7 +245,7 @@ pub fn strings() -> HashMap<String, String> {
     all
 }
 
-/// A language file dropped on DropLaunch: checked, then kept in the app data's Languages folder
+/// A language file dropped on DropLaunch: checked, then kept in the data folder's Languages folder
 /// (a newer file with the same code replaces the older one).
 pub fn import(path: &Path, data: &Path) -> Result<Language, String> {
     let (meta, _) = read_file(path)?;

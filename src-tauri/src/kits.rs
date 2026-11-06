@@ -95,7 +95,7 @@ pub fn load_files(data: &Path) -> Vec<(Kit, PathBuf)> {
     let old = data.join(KITS_FILE);
     if old.is_file() {
         if let Some(kits) = std::fs::read_to_string(&old).ok().and_then(|text| serde_json::from_str::<Vec<Kit>>(&text).ok()) {
-            if save(data, &kits).is_ok() {
+            if save(data, &kits, &[]).is_ok() {
                 let _ = std::fs::rename(&old, old.with_extension("json.old"));
             }
         }
@@ -197,25 +197,18 @@ pub fn import(data: &Path, path: &Path) -> Result<Kit> {
     if kit.name.is_empty() {
         kit.name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Kit".into());
     }
-    let mut kits = load(data);
-    kits.retain(|k| k.id != kit.id);
-    kits.push(kit.clone());
-    save(data, &kits)?;
+    // (A kit with the same id is replaced: its file is reused.)
+    save(data, std::slice::from_ref(&kit), &[])?;
     Ok(kit)
 }
 
 /// What the plugin prints when a player saves their inventory as a kit (/droplaunch kit).
-const GAME_KIT_MARKER: &str = "DLKITSAVE1 ";
+pub const GAME_KIT_MARKER: &str = "DLKITSAVE1 ";
 
-/// The JSON of a kit saved in the game, in a server log line (printed by the plugin itself: not
-/// a chat message that types the marker).
-pub fn game_kit_json(line: &str) -> Option<&str> {
-    let at = line.find(GAME_KIT_MARKER)?;
-    if !line[..at].trim_end().ends_with("[DropLaunch]") || line.contains("[CHAT]") {
-        return None;
-    }
-    let json = line[at + GAME_KIT_MARKER.len()..].trim();
-    json.starts_with('{').then_some(json)
+/// The JSON of a kit saved in the game, in a server log line (printed by the plugin itself, with
+/// the server folder's `key`: not a chat message that types the marker).
+pub fn game_kit_json<'a>(line: &'a str, key: Option<&str>) -> Option<&'a str> {
+    crate::playtest::plugin_json(line, GAME_KIT_MARKER, key)
 }
 
 /// A kit as the plugin prints it: the player's wear, belt and inventory.
@@ -262,12 +255,10 @@ pub fn from_game(data: &Path, json: &str) -> Result<Kit> {
     if item_count(&kit) == 0 {
         bail!("an empty kit");
     }
-    let mut kits = load(data);
-    if let Some(same) = kits.iter().find(|k| k.id == kit.id) {
-        return Ok(same.clone());
+    if let Some(same) = load(data).into_iter().find(|k| k.id == kit.id) {
+        return Ok(same);
     }
-    kits.push(kit.clone());
-    save(data, &kits)?;
+    save(data, std::slice::from_ref(&kit), &[])?;
     Ok(kit)
 }
 
@@ -285,41 +276,57 @@ pub fn clean(mut kit: Kit) -> Kit {
     kit
 }
 
-/// Every kit into its own file (named after the kit; a renamed kit's file follows), and the files
-/// of kits that are gone removed.
-pub fn save(data: &Path, kits: &[Kit]) -> Result<()> {
+/// These kits into their own files (named after the kit; a renamed kit's file follows), and the
+/// files of the `removed` kits deleted. Every other kit file stays as it is: one copied into the
+/// Kits folder while DropLaunch is open isn't in the list the window holds.
+pub fn save(data: &Path, kits: &[Kit], removed: &[String]) -> Result<()> {
     let dir = data.join(KITS_DIR);
     std::fs::create_dir_all(&dir)?;
     let existing: Vec<(String, PathBuf)> = std::fs::read_dir(&dir)
         .map(|entries| entries.flatten().map(|e| e.path()).filter_map(|p| read_kit(&p).ok().map(|k| (k.id, p))).collect())
         .unwrap_or_default();
     let mut taken: Vec<PathBuf> = Vec::new();
+    let is_taken = |taken: &[PathBuf], p: &Path| taken.iter().any(|t| same_file(t, p));
     for kit in kits {
         let stem = file_stem(&kit.name);
         let mine = existing.iter().find(|(id, _)| *id == kit.id).map(|(_, p)| p.clone());
-        // Keep its file while the name fits it; else the first free name.
-        let fits = |p: &PathBuf| p.file_stem().and_then(|s| s.to_str()).is_some_and(|s| s == stem || s.strip_prefix(&format!("{stem}-")).is_some_and(|n| n.chars().all(|c| c.is_ascii_digit())));
-        let path = match mine.as_ref().filter(|p| fits(p) && !taken.contains(p)) {
+        // Keep its file while the name fits it (`Raid.json` fits "Raid" too); else the first free name.
+        let fits = |p: &PathBuf| {
+            p.file_stem().and_then(|s| s.to_str()).map(str::to_ascii_lowercase).is_some_and(|s| {
+                s == stem || s.strip_prefix(&format!("{stem}-")).is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()))
+            })
+        };
+        let path = match mine.as_ref().filter(|p| fits(p) && !is_taken(&taken, p)) {
             Some(p) => p.clone(),
             None => (1..)
                 .map(|n| dir.join(if n == 1 { format!("{stem}.json") } else { format!("{stem}-{n}.json") }))
-                .find(|p| !taken.contains(p) && existing.iter().all(|(id, q)| q != p || *id == kit.id))
+                .find(|p| !is_taken(&taken, p) && existing.iter().all(|(id, q)| !same_file(q, p) || *id == kit.id))
                 .expect("a free name"),
         };
         let partial = path.with_extension("json.part");
         std::fs::write(&partial, serde_json::to_string_pretty(&KitFile { mark: KIT_MARK, kit: kit.clone() })?)?;
         std::fs::rename(&partial, &path)?;
-        if let Some(old) = mine.filter(|old| *old != path) {
+        // Its other files go: the one from before a rename, a copy with the same id.
+        for (_, old) in existing.iter().filter(|(id, old)| *id == kit.id && !same_file(old, &path)) {
             let _ = std::fs::remove_file(old);
         }
         taken.push(path);
     }
-    for (_, path) in existing {
-        if !taken.contains(&path) {
+    for (id, path) in &existing {
+        if removed.contains(id) && !is_taken(&taken, path) {
             let _ = std::fs::remove_file(path);
         }
     }
     Ok(())
+}
+
+/// The same file: on Windows `Raid.json` and `raid.json` are one.
+fn same_file(a: &Path, b: &Path) -> bool {
+    if cfg!(windows) {
+        a.as_os_str().eq_ignore_ascii_case(b.as_os_str())
+    } else {
+        a == b
+    }
 }
 
 /// Rust's short names are lower case letters, digits, dots, dashes and underscores; nothing else
@@ -471,6 +478,7 @@ mod tests {
         assert!(data.join(KITS_DIR).join("raid.json").is_file());
         assert!(data.join(KITS_DIR).join("basic-build-kit.json").is_file());
         assert!(!data.join(KITS_FILE).exists());
+        let built_in = kits.iter().find(|k| k.name == "Basic Build Kit").unwrap().id.clone();
         let kits: Vec<Kit> = kits.into_iter().filter(|k| k.name == "Raid").collect();
         // Renamed: its file follows (and the built-in kit, deleted, doesn't come back); a second kit with the same name gets its own file.
         let mut renamed = kits[0].clone();
@@ -478,7 +486,7 @@ mod tests {
         let mut other = kit();
         other.id = "k2".into();
         other.name = "Raid kit".into();
-        save(&data, &[renamed, other]).unwrap();
+        save(&data, &[renamed, other], &[built_in]).unwrap();
         let mut names: Vec<String> = std::fs::read_dir(data.join(KITS_DIR)).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         names.sort();
         assert_eq!(names, ["raid-kit-2.json", "raid-kit.json"]);
@@ -493,15 +501,48 @@ mod tests {
         assert_eq!(kits.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(), ["Raid kit", "Shared"]);
         std::fs::write(&shared, r#"{"language":{"code":"nl","name":"Nederlands"},"strings":{}}"#).unwrap();
         assert!(read_kit(&shared).is_err());
-        save(&data, &[]).unwrap();
+        save(&data, &[], &["k".into(), "k2".into()]).unwrap();
         assert_eq!(std::fs::read_dir(data.join(KITS_DIR)).unwrap().count(), 0);
         let _ = std::fs::remove_dir_all(&data);
     }
 
     #[test]
+    fn a_save_leaves_the_other_kit_files_alone() {
+        let data = std::env::temp_dir().join(format!("droplaunch-kitsave-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&data);
+        let dir = data.join(KITS_DIR);
+        let names = || {
+            let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+            names.sort();
+            names
+        };
+        let mine = clean(kit());
+        save(&data, std::slice::from_ref(&mine), &[]).unwrap();
+        // Copied into the Kits folder by hand while DropLaunch is open: the window's list doesn't have it.
+        let mut friend = kit();
+        friend.id = "f".into();
+        friend.name = "Friend".into();
+        std::fs::write(dir.join("Friend's kit.json"), serde_json::to_string(&KitFile { mark: 1, kit: friend }).unwrap()).unwrap();
+        // Renaming another kit leaves it alone.
+        let renamed = Kit { name: "Raid 2".into(), ..mine.clone() };
+        save(&data, std::slice::from_ref(&renamed), &[]).unwrap();
+        assert_eq!(names(), ["Friend's kit.json", "raid-2.json"]);
+        // A file named in other letters is still that kit's own: kept, not deleted (on Windows it's the same file).
+        std::fs::rename(dir.join("raid-2.json"), dir.join("Raid-2.json")).unwrap();
+        save(&data, &[renamed], &[]).unwrap();
+        assert_eq!(names(), ["Friend's kit.json", "Raid-2.json"]);
+        assert_eq!(read_kit(&dir.join("Raid-2.json")).unwrap().name, "Raid 2");
+        // Deleted: only that kit's file goes.
+        save(&data, &[], &["k".into()]).unwrap();
+        assert_eq!(names(), ["Friend's kit.json"]);
+        let _ = std::fs::remove_dir_all(&data);
+    }
+
+    #[test]
     fn kits_saved_in_the_game() {
-        let line = r#"[DropLaunch] DLKITSAVE1 {"id":"6389-76561198000000001","name":"","by":"Ted","wear":[{"item":"hat.wolf","amount":1,"slot":0}],"belt":[{"item":"rifle.ak","amount":1,"slot":0}],"main":[{"item":"wood","amount":99999,"slot":3}]}"#;
-        let json = game_kit_json(line).unwrap();
+        let key = Some("k3y");
+        let line = r#"[DropLaunch] DLKITSAVE1 k3y {"id":"6389-76561198000000001","name":"","by":"Ted","wear":[{"item":"hat.wolf","amount":1,"slot":0}],"belt":[{"item":"rifle.ak","amount":1,"slot":0}],"main":[{"item":"wood","amount":99999,"slot":3}]}"#;
+        let json = game_kit_json(line, key).unwrap();
         assert_eq!(describe_game_kit(json), "Kit \"Ted's inventory\" saved in the game by Ted (3 items).");
         let data = std::env::temp_dir().join(format!("droplaunch-gamekit-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&data);
@@ -511,8 +552,14 @@ mod tests {
         // The same line again (a log read twice) adds nothing.
         from_game(&data, json).unwrap();
         assert_eq!(load(&data).iter().filter(|k| k.id == kit.id).count(), 1);
-        // Typed in the chat, it's not the plugin's.
-        assert!(game_kit_json(r#"[CHAT] Ted[76561198000000001] : [DropLaunch] DLKITSAVE1 {"id":"x"}"#).is_none());
+        // Typed in the chat, it's not the plugin's; nor without the key, or with another one.
+        assert!(game_kit_json(r#"[CHAT] Ted[76561198000000001] : [DropLaunch] DLKITSAVE1 k3y {"id":"x"}"#, key).is_none());
+        assert!(game_kit_json(r#"[DropLaunch] DLKITSAVE1 {"id":"x"}"#, key).is_none());
+        assert!(game_kit_json(r#"[DropLaunch] DLKITSAVE1 other {"id":"x"}"#, key).is_none());
+        // A player name made to look like the plugin's title, and the rest typed in the chat
+        // (second sweep, H1): no key.
+        let forged = r#"[CHAT] [DropLaunch] DLKITSAVE1 {"a":"[76561198000000002] : ","id":"forged-1","by":"The Owner","main":[{"item":"wood","amount":1,"slot":0}]}"#;
+        assert!(game_kit_json(forged, key).is_none());
         let _ = std::fs::remove_dir_all(&data);
     }
 

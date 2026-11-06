@@ -12,7 +12,9 @@
 
 <p align="center">
   <a href="https://github.com/tedpommes/DropLaunch/releases/latest"><b>⬇ Download DropLaunch</b></a>
-  &nbsp;·&nbsp; Windows 10 / 11 &nbsp;·&nbsp; Free and open source
+  &nbsp;·&nbsp; <a href="https://droplaunch.gg">droplaunch.gg</a>
+  &nbsp;·&nbsp; <a href="https://droplaunch.gg/demo/">Try it in your browser</a><br>
+  Windows 10 / 11 &nbsp;·&nbsp; Free and open source
 </p>
 
 <p align="center">
@@ -36,12 +38,23 @@
   Teleport there to see it yourself.
 - **Gives items** to you and your testers: from kits you make, or the built-in build kit (a
   building plan, a hammer and plenty of materials).
-- **More options** when you want them: the server console, live server stats, mods, start files,
-  other server branches, and a cleanup for the maps Rust keeps in its cache (backed up for 30
+- **Your own start files.** Drop a start file on DropLaunch (one from the
+  [start file generator](https://droplaunch.gg/generator), say) and your maps start with its
+  settings.
+- **Choose who can join.** Turn on the whitelist and only you and the players you add get in, on
+  every test server.
+- **More options** when you want them: the server console, live server stats, mods, other server
+  branches, and a cleanup for the maps Rust keeps in its cache (backed up for 30
   days first).
 - **Shows you around** if you're new: tips explain each step as it comes up, and a Getting
   started list ticks itself off as you go.
-- **Keeps itself up to date**, showing what's new first, and the server files too.
+- **Your colours, your language.** Default, Light, Grey or Vibrant, or drop a theme file on it to
+  add your own. Save the English file, translate it and drop it on DropLaunch: a file only needs
+  the lines it changes.
+- **All in one folder.** Everything DropLaunch keeps is in `DropLaunch-data` next to the exe, so
+  moving the folder takes it all along.
+- **Keeps itself up to date**, showing what's new first, and the server files too. To update the
+  servers without starting DropLaunch, run `update_rust_server.bat` in the `SteamCMD` folder.
 
 <p align="center">
   <img src="docs/screenshots/expanded.png" width="820" alt="The expanded view: server console, live stats, give items and bug reports">
@@ -57,7 +70,8 @@
 
 1. **Download** `DropLaunch.exe` from the [latest release](https://github.com/tedpommes/DropLaunch/releases/latest).
 2. **Put it in an empty folder**, for example `C:\DropLaunch`. DropLaunch creates its folders
-   next to itself: `SteamCMD`, `Server_Files` and, once it's set up, `Maps`.
+   next to itself: `DropLaunch-data` (its settings, kits, bug reports and log), `SteamCMD`,
+   `Server_Files` and, once it's set up, `Maps`.
 3. **Start it and click Set up a server.** The download starts right away: the Rust server is
    about 6 GB, so it takes 5 to 30 minutes depending on your connection. Pick your options
    meanwhile; **Hide** keeps it going in the background.
@@ -95,11 +109,13 @@ so nobody else can slip in a changed version.
 
 **Something doesn't work.**
 Please [open an issue](https://github.com/tedpommes/DropLaunch/issues) and attach `droplaunch.log`
-from `%LOCALAPPDATA%\DropLaunch`: DropLaunch writes what went wrong in the background there.
+from the `DropLaunch-data` folder next to the exe: DropLaunch writes what went wrong in the
+background there. Its times are your PC's own clock, so saying roughly when it happened helps.
 
 **How do I remove it?**
-Stop any running server, then delete the DropLaunch folder. Its settings, kits and bug reports
-are in `%LOCALAPPDATA%\DropLaunch`; delete that folder too.
+Stop any running server, then delete the DropLaunch folder: everything DropLaunch keeps is in it
+(`DropLaunch-data`). Older versions kept their settings, kits and bug reports in
+`%LOCALAPPDATA%\DropLaunch`; if that folder is still there, delete it too.
 
 **Where can I read about everything it does?**
 In the [full guide](docs/GUIDE.md). Building it yourself: [development notes](docs/DEVELOPMENT.md).

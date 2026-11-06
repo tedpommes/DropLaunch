@@ -4,9 +4,11 @@
 import { $, el, icon, invoke, fmtBytes, fmtWhen, toast, confirmDialog, copyText, desktopNotify, onNotificationClick } from "./util.js";
 import { contextMenu } from "./menu.js";
 import { readPicture } from "./mapcanvas.js";
-import { t, richn } from "./i18n.js";
+import { t, tn, richn } from "./i18n.js";
 
 const PROCGEN = "procgen";
+/** A start file of yours in the list: `preset:<its name>`. */
+const PRESET = "preset:";
 const SELECT_KEY = "droplaunch.selectedMap";
 const SORT_KEY = "droplaunch.mapSort";
 const COLLAPSED_KEY = "droplaunch.collapsedGroups";
@@ -30,7 +32,12 @@ const store = {
 };
 
 /** A language file (checked properly when it's added). */
-const isLanguageFile = (path) => /\.json$/i.test(path);
+/** A theme, language or kit file. */
+const isJsonFile = (path) => /\.json$/i.test(path);
+/** A start file (checked properly when it's added). */
+export const isStartFile = (path) => /\.(bat|cmd|sh)$/i.test(path);
+/** What the backend starts for an entry of the list. */
+export const targetOf = (m) => (m.preset ? { kind: "preset", name: m.preset } : m.procgen ? { kind: "procgen" } : { kind: "map", path: m.path });
 
 export function initMaps(ctx) {
   let list = { mapsDir: "", maps: [], history: [] };
@@ -54,18 +61,38 @@ export function initMaps(ctx) {
   const procgenEntry = () => ({
     path: PROCGEN,
     name: t("maps.procgen.name"),
+    // Its seed and size: DropLaunch's own, or a start file of yours chosen in Settings.
+    seed: ctx.state?.procgen?.seed ?? "1184645116",
+    size: ctx.state?.procgen?.size ?? "3000",
+    file: ctx.state?.procgen?.file ?? null,
     procgen: true,
     folder: "",
     startFile: ctx.state?.startFile ?? null,
   });
 
+  /** A procedural map's start file dropped on DropLaunch: it starts with all its settings, its
+   * seed and size too. */
+  const presetEntry = (p) => ({
+    path: `${PRESET}${p.name}`,
+    name: p.title,
+    preset: p.name,
+    procgen: true,
+    seed: p.seed,
+    size: p.size,
+    file: p.name,
+    folder: "",
+    startFile: p.startFile ?? null,
+  });
+  const presets = () => (list.presets ?? []).map(presetEntry);
+
   function allEntries() {
-    return [procgenEntry(), ...list.maps, ...list.history];
+    return [procgenEntry(), ...presets(), ...list.maps, ...list.history];
   }
 
   /** The entry a row shows (the same map can be in the Maps folder and the history). */
   function entryFor(node) {
-    const from = node.dataset.group === "history" ? list.history : node.dataset.group === "maps" ? list.maps : [procgenEntry()];
+    const groups = { history: list.history, maps: list.maps, presets: presets() };
+    const from = groups[node.dataset.group] ?? [procgenEntry()];
     return from.find((m) => m.path === node.dataset.path) ?? allEntries().find((m) => m.path === node.dataset.path);
   }
 
@@ -108,6 +135,7 @@ export function initMaps(ctx) {
   function runningPath() {
     const server = running();
     if (!server) return null;
+    if (server.preset) return `${PRESET}${server.preset}`;
     return server.procgen ? PROCGEN : server.map;
   }
 
@@ -118,7 +146,7 @@ export function initMaps(ctx) {
   }
 
   // ---------------------------------------------------------------- map pictures as icons
-  // Drawn by the backend from each .map file (once per version, kept in the app data's Thumbs);
+  // Drawn by the backend from each .map file (once per version, kept in the data folder's Thumbs);
   // a click opens the map viewer. The procedural map gets one once a server has built it.
   /** key -> image URL, or null (none yet, being made, or the file couldn't be drawn). */
   const thumbs = new Map();
@@ -160,6 +188,8 @@ export function initMaps(ctx) {
 
   /** The map's picture as its icon (a click shows it big), or the plain icon until there is one. */
   function mapIcon(m, big = false) {
+    // A start file of yours: its own icon, so it stands out from the maps.
+    if (m.preset) return el("span", { class: `map-icon preset${big ? " big" : ""}` }, icon("file"));
     const key = thumbKey(m);
     const url = thumbs.get(key);
     const cls = `map-icon${big ? " big" : ""}${m.procgen ? " procgen" : ""}`;
@@ -195,7 +225,7 @@ export function initMaps(ctx) {
     const history = groupKey === "history";
     const folder = m.outside ? m.folder : m.folder ? `Maps\\${m.folder}` : "Maps";
     const meta = m.procgen
-      ? el("span", { class: "map-folder", text: t("maps.procgen.meta", { seed: 1184645116, size: 3000 }) })
+      ? el("span", { class: "map-folder", text: m.file ? t("maps.procgen.metaFile", { seed: m.seed, size: m.size, file: m.file }) : t("maps.procgen.meta", { seed: m.seed, size: m.size }) })
       : history
         ? el("span", { class: "map-folder", text: [m.started ? t("maps.started", { when: fmtWhen(m.started) }) : null, folder].filter(Boolean).join(" · "), title: m.path })
         : el("span", { class: "map-folder", text: m.folder || "Maps", title: m.outside ? m.folder : "" });
@@ -206,10 +236,11 @@ export function initMaps(ctx) {
         role: "option",
         "aria-selected": String(isSelected),
         dataset: { path: m.path, group: groupKey },
-        title: m.procgen ? t("maps.procgen.title") : m.path,
+        title: m.preset ? t("maps.preset.title", { name: m.preset }) : m.procgen ? t("maps.procgen.title") : m.path,
       },
       mapIcon(m),
       el("div", { class: "map-main" }, el("span", { class: "map-name", text: m.name }), meta),
+      m.preset && !isRunning ? el("span", { class: "use-tag", text: t("maps.chip.yourStartFile") }) : null,
       isRunning && ctx.server?.stuck()
         ? el("span", { class: "chip chip-stuck", text: t("maps.chip.stuck"), title: t("maps.chip.stuck.title") })
         : isRunning
@@ -222,7 +253,7 @@ export function initMaps(ctx) {
             title: fresh.new ? t("maps.chip.new.title", { when: fmtWhen(m.modified) }) : t("maps.chip.saved.title", { when: fmtWhen(m.modified) }),
           })
         : null,
-      (m.startFile || m.prefabFile) && !isRunning && !fresh
+      (m.startFile || m.prefabFile) && !m.preset && !isRunning && !fresh
         ? el("span", { class: "chip", text: t("maps.chip.startFiles"), title: [m.startFile, m.prefabFile].filter(Boolean).join("\n") })
         : null,
       el("span", { class: "map-size", text: m.procgen ? "" : fmtBytes(m.size) }),
@@ -245,7 +276,20 @@ export function initMaps(ctx) {
               },
               icon("x"),
             )
-          : null,
+          : m.preset && !isRunning
+            ? el(
+                "button",
+                {
+                  class: "icon-btn row-forget",
+                  title: t("settings.assets.start.forget"),
+                  onclick: (e) => {
+                    e.stopPropagation();
+                    removePreset(m);
+                  },
+                },
+                icon("x"),
+              )
+            : null,
         m.procgen || isRunning
           ? null
           : el(
@@ -312,7 +356,7 @@ export function initMaps(ctx) {
   /** Searching shows every match, folded groups included. */
   const isOpen = (key) => Boolean(query) || !collapsed.has(key);
 
-  const GROUP_ICONS = { builtin: "terrain", maps: "folder", history: "history" };
+  const GROUP_ICONS = { builtin: "terrain", presets: "file", maps: "folder", history: "history" };
 
   /** A section of the list: its header (folds it away) and its rows. */
   function section(key, title, count, rows, extra) {
@@ -351,6 +395,8 @@ export function initMaps(ctx) {
     const procgen = procgenEntry();
     const sections = [];
     if (matches(procgen)) sections.push(section("builtin", t("maps.group.builtin"), null, [row(procgen, "builtin")]));
+    const yours = presets().filter(matches);
+    if (yours.length) sections.push(section("presets", t("maps.group.presets"), yours.length, yours.map((m) => row(m, "presets"))));
     let folderRows;
     if (maps.length) folderRows = maps.map((m) => row(m, "maps"));
     else if (list.maps.length) folderRows = [el("div", { class: "map-empty", text: t("maps.noMatch", { query }) })];
@@ -467,6 +513,19 @@ export function initMaps(ctx) {
     }
   }
 
+  /** A start file of yours off the list (and out of Settings; the file you dropped stays). */
+  async function removePreset(m) {
+    try {
+      await invoke("start_file_forget", { name: m.preset });
+    } catch (err) {
+      toast(String(err), "error");
+      return;
+    }
+    await ctx.refresh();
+    await reload();
+    ctx.settings?.render();
+  }
+
   /** Start a server with `m`, normally or in prefab test mode (asks before replacing a running
    * server or ignoring Oxide). */
   async function start(m, { prefab = false, replace = false, ignoreOxide = false } = {}) {
@@ -481,7 +540,7 @@ export function initMaps(ctx) {
       toast(t("maps.blocked"));
       return;
     }
-    const target = m.procgen ? { kind: "procgen" } : { kind: "map", path: m.path };
+    const target = targetOf(m);
     prefab = prefab && !m.procgen;
     const name = prefab ? t("maps.namePrefab", { name: m.name }) : m.name;
     let reply;
@@ -530,13 +589,16 @@ export function initMaps(ctx) {
     await reload();
   }
 
-  /** Files dropped on the window, or the exe was opened with (kit files go to the kits,
-   * language files to Settings). */
+  /** Files dropped on the window, or the exe was opened with (kit files go to the kits, theme
+   * and language files to Settings, start files to the list or Settings). */
   async function openFiles(all) {
-    let json = (all ?? []).filter(isLanguageFile);
-    const paths = (all ?? []).filter((p) => !isLanguageFile(p));
+    let json = (all ?? []).filter(isJsonFile);
+    const scripts = (all ?? []).filter(isStartFile);
+    const paths = (all ?? []).filter((p) => !isJsonFile(p) && !isStartFile(p));
     if (paths.length) await openMaps(paths);
+    if (scripts.length) await ctx.settings.addStartFiles(scripts);
     if (json.length) json = await ctx.kits.importFiles(json);
+    if (json.length) json = await ctx.settings.addThemes(json);
     if (json.length) await ctx.settings.addLanguages(json);
   }
 
@@ -548,16 +610,20 @@ export function initMaps(ctx) {
       toast(String(err), "error");
       return;
     }
-    if (result.problems.length) toast(result.problems.join(" · "), result.maps.length ? "" : "error");
-    // What else a .zip held: its kits and language files are added (not switched to), and its
-    // start file's settings go into the map's own start files.
+    const kept = result.keptStartFiles ?? [];
+    if (result.problems.length && !kept.length) toast(result.problems.join(" · "), result.maps.length ? "" : "error");
+    // What else a .zip held: its kits, themes and language files are added (not switched to), its map's
+    // start file's settings go into the map's own start files, and other start files are kept
+    // like ones dropped on DropLaunch.
     if (result.files?.length) {
-      const rest = await ctx.kits.importFiles(result.files);
+      let rest = await ctx.kits.importFiles(result.files);
+      if (rest.length) rest = await ctx.settings.addThemes(rest, { use: false });
       if (rest.length) await ctx.settings.addLanguages(rest, { use: false });
     }
     if (result.startFiles?.length && result.maps.length) {
       toast(t("maps.zipStartFile", { file: result.startFiles[0].split(/[\\/]/).pop() }), "ok");
     }
+    if (kept.length) await ctx.settings.startFilesKept(kept, result.problems);
     if (!result.maps.length) return;
     ctx.setTab("maps");
     await reload();
@@ -603,6 +669,8 @@ export function initMaps(ctx) {
       !m.procgen && { label: t("maps.menu.copyPath"), icon: "copy", run: () => copyText(m.path, t("maps.menu.pathWhat")) },
       m.started != null && "sep",
       m.started != null && { label: t("maps.menu.forget"), icon: "x", run: () => forget(m) },
+      m.preset && "sep",
+      m.preset && { label: t("maps.menu.removePreset"), icon: "x", run: () => removePreset(m) },
     ]);
   }
 
@@ -664,15 +732,19 @@ export function initMaps(ctx) {
     if (type === "enter" || type === "over") {
       if (type === "enter" && paths) {
         const usable = paths.filter((p) => /\.(map|zip)$/i.test(p) || !/\.[^\\/]+$/.test(p));
-        const languages = paths.filter(isLanguageFile);
-        if (languages.length && !usable.length) {
-          $("drop-title").textContent = t("drop.language");
-          $("drop-detail").textContent = t("drop.language.detail");
+        const json = paths.filter(isJsonFile);
+        const scripts = paths.filter(isStartFile);
+        if (json.length && !usable.length && !scripts.length) {
+          $("drop-title").textContent = t("drop.json");
+          $("drop-detail").textContent = t("drop.json.detail");
+        } else if (scripts.length && !usable.length) {
+          $("drop-title").textContent = tn("drop.startFile", scripts.length);
+          $("drop-detail").textContent = t("drop.startFile.detail");
         } else {
           $("drop-title").textContent = usable.length ? (usable.length > 1 ? t("drop.many", { n: usable.length }) : t("drop.start")) : t("drop.nope");
           $("drop-detail").textContent = usable.length ? t("drop.detail") : t("drop.nope.detail");
         }
-        overlay.classList.toggle("nope", !usable.length && !languages.length);
+        overlay.classList.toggle("nope", !usable.length && !json.length && !scripts.length);
       }
       overlay.hidden = false;
     } else if (type === "leave") {
@@ -699,6 +771,13 @@ export function initMaps(ctx) {
     },
     start,
     openFiles,
+    /** Show a start file of yours that was just added to the list. */
+    async showPreset(name) {
+      ctx.setTab("maps");
+      if (collapsed.delete("presets")) store.set(COLLAPSED_KEY, JSON.stringify([...collapsed]));
+      await reload();
+      select(`${PRESET}${name}`);
+    },
     selected: selectedEntry,
     select,
     /** The list shows this map (in the active folder or the history). */

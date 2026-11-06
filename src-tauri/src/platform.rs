@@ -163,6 +163,30 @@ pub fn close_rust(wait: std::time::Duration) -> bool {
 }
 
 /// Free bytes on the drive holding `path` (None if unknown).
+/// Seconds to add to `utc` (seconds since 1970) for this PC's local time then: its time zone,
+/// and summer time when that is on now.
+#[cfg(windows)]
+pub fn utc_offset_secs(utc: i64) -> i64 {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::Storage::FileSystem::FileTimeToLocalFileTime;
+    // FILETIME: 100 ns steps since 1601.
+    const FROM_1601: i64 = 11_644_473_600;
+    let ticks = (utc + FROM_1601).max(0) as u64 * 10_000_000;
+    let from = FILETIME { dwLowDateTime: ticks as u32, dwHighDateTime: (ticks >> 32) as u32 };
+    let mut local = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
+    // SAFETY: two FILETIMEs we own.
+    if unsafe { FileTimeToLocalFileTime(&from, &mut local) } == 0 {
+        return 0;
+    }
+    let local_ticks = (u64::from(local.dwHighDateTime) << 32) | u64::from(local.dwLowDateTime);
+    (local_ticks as i64 - ticks as i64) / 10_000_000
+}
+
+#[cfg(not(windows))]
+pub fn utc_offset_secs(_utc: i64) -> i64 {
+    0
+}
+
 #[cfg(windows)]
 pub fn free_space(path: &Path) -> Option<u64> {
     use std::os::windows::ffi::OsStrExt;
@@ -363,7 +387,7 @@ pub fn hide_console(cmd: &mut Command) {
 }
 
 #[cfg(windows)]
-pub use win::{find_processes, launch_console, process_name, Launched, ProcInfo, ProcessHandle, ProcessJob};
+pub use win::{find_processes, launch_console, Launched, ProcInfo, ProcessHandle, ProcessJob};
 
 #[cfg(windows)]
 mod win {
@@ -662,30 +686,6 @@ mod win {
         pub path: PathBuf,
     }
 
-    /// The file name of a running process (e.g. "Discord.exe").
-    pub fn process_name(pid: u32) -> Option<String> {
-        // SAFETY: as in find_processes.
-        unsafe {
-            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-            if snap == INVALID_HANDLE_VALUE || snap.is_null() {
-                return None;
-            }
-            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
-            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-            let mut more = Process32FirstW(snap, &mut entry) != 0;
-            let mut found = None;
-            while more {
-                if entry.th32ProcessID == pid {
-                    let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
-                    found = Some(OsString::from_wide(&entry.szExeFile[..len]).to_string_lossy().into_owned());
-                    break;
-                }
-                more = Process32NextW(snap, &mut entry) != 0;
-            }
-            CloseHandle(snap);
-            found
-        }
-    }
 
     /// Running processes whose file name is `exe_name` (e.g. RustDedicated.exe), with full paths.
     pub fn find_processes(exe_name: &str) -> Vec<ProcInfo> {
@@ -732,7 +732,7 @@ pub fn launch_console(dir: &Path, script: &str, env: &[(&str, &str)]) -> std::io
 }
 
 #[cfg(not(windows))]
-pub use unix::{find_processes, process_name, Launched, ProcInfo, ProcessHandle, ProcessJob};
+pub use unix::{find_processes, Launched, ProcInfo, ProcessHandle, ProcessJob};
 
 #[cfg(not(windows))]
 mod unix {
@@ -780,10 +780,6 @@ mod unix {
         pub pid: u32,
         pub parent: u32,
         pub path: PathBuf,
-    }
-
-    pub fn process_name(pid: u32) -> Option<String> {
-        std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|s| s.trim().to_string())
     }
 
     pub fn find_processes(exe_name: &str) -> Vec<ProcInfo> {

@@ -67,7 +67,7 @@ fn main() {
 
     for name in ["terrain", "height", "water"] {
         if let Some(layer) = world.layer(name) {
-            let raw: Vec<u16> = layer.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            let raw: Vec<u16> = layer.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
             let (min, max) = (raw.iter().min().copied().unwrap_or(0), raw.iter().max().copied().unwrap_or(0));
             let mean = raw.iter().map(|&v| f64::from(v)).sum::<f64>() / raw.len().max(1) as f64;
             let above = raw.iter().filter(|&&v| v > 16383).count() as f64 / raw.len().max(1) as f64 * 100.0;
@@ -272,6 +272,7 @@ fn parse_world(data: &[u8]) -> World<'_> {
 
 type C = [f32; 3];
 const START: C = [0.286, 0.271, 0.247];
+#[allow(clippy::approx_constant)] // (a colour, not 1/pi)
 const WATER: C = [0.169, 0.318, 0.362];
 const OFFSHORE: C = [0.041, 0.221, 0.275];
 const GRAVEL: (C, f32) = ([0.25, 0.243, 0.220], 0.372);

@@ -23,7 +23,7 @@ use crate::owner::{self, SteamUser};
 use crate::playtest;
 use crate::whitelist;
 use crate::platform::{self, ProcessHandle, ProcessJob};
-use crate::startfile::{self, Layout, StartFile, Target, LAUNCH_ENV};
+use crate::startfile::{self, Chosen, Layout, StartFile, Target, Use, LAUNCH_ENV};
 use crate::sync::Locked;
 use crate::steamcmd::manifest::{self, SERVER_EXECUTABLE};
 use boot::Tracker;
@@ -36,8 +36,10 @@ const AFTER_PANIC: Duration = Duration::from_secs(2);
 /// Often enough for the performance graph.
 const INFO_EVERY: Duration = Duration::from_secs(2);
 const QUIT_TIMEOUT: Duration = Duration::from_secs(45);
-/// How long the start file may take to start RustDedicated.
-const SPAWN_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long the start file may take to start RustDedicated while it still runs: a first start
+/// on a slow drive, or one an antivirus scans first, takes a while. A start file that ended
+/// without starting it is seen at once (its job has no processes left).
+const SPAWN_TIMEOUT: Duration = Duration::from_secs(180);
 const INFO_ID: i32 = 2_000_000_000;
 /// RCON questions that went unanswered in time, remembered so their late answers are dropped.
 const ABANDONED_KEEP: usize = 32;
@@ -88,7 +90,10 @@ pub struct ServerView {
     pub title: String,
     /// The map file; None for the procedural map (or an unknown server).
     pub map: Option<String>,
+    /// The procedural map, with DropLaunch's settings or a start file's.
     pub procgen: bool,
+    /// The start file of yours it was started with from the map list (its name).
+    pub preset: Option<String>,
     pub start_file: Option<String>,
     pub log_file: Option<String>,
     /// Started with the map's prefab test mode file.
@@ -121,12 +126,14 @@ pub struct ConsoleLine {
     /// Who said it: server | map | carbon | oxide | rustedit | rcon | droplaunch
     pub source: &'static str,
     pub time: i64,
+    /// Counts up from 1: the window shows a line it already has (from `status` and an event) once.
+    pub seq: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ServerEvent {
-    State { server: Option<ServerView> },
+    State { server: Option<Box<ServerView>> },
     Lines { lines: Vec<ConsoleLine> },
 }
 
@@ -134,7 +141,7 @@ pub enum ServerEvent {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "result", rename_all = "camelCase")]
 pub enum StartReply {
-    Started { server: ServerView },
+    Started { server: Box<ServerView> },
     /// Another server runs; ask before replacing it.
     Busy { title: String },
     /// The running server is stopping; this one starts right after.
@@ -158,6 +165,12 @@ pub struct StartContext {
     pub map_backups: Option<PathBuf>,
     /// Who may join (None: everyone; the DropLaunch plugin checks it).
     pub whitelist: Option<Vec<String>>,
+    /// The start files of yours DropLaunch's own take their settings from: the procedural map's,
+    /// custom maps' (None: DropLaunch's own settings).
+    pub procgen_settings: Option<PathBuf>,
+    pub maps_settings: Option<PathBuf>,
+    /// DropLaunch's data folder (the start files of yours in the map list are kept there).
+    pub data: PathBuf,
 }
 
 impl StartContext {
@@ -176,6 +189,28 @@ impl StartContext {
             clean_client_maps: store.config.clean_client_maps,
             map_backups: store.config.backup_client_maps.then(|| store.data.join(client::BACKUP_DIR)),
             whitelist: store.config.whitelist_ids(),
+            procgen_settings: store.chosen_start_file(Use::Procgen),
+            maps_settings: store.chosen_start_file(Use::Maps),
+            data: store.data.clone(),
+        }
+    }
+
+    /// The start file of yours `target`'s start files take their settings from (None: none was
+    /// chosen, or it's gone).
+    pub fn chosen(&self, target: &Target) -> Option<Chosen> {
+        match target {
+            Target::Procgen => Chosen::read(self.procgen_settings.as_ref()?, Use::Procgen),
+            Target::Map(_) => Chosen::read(self.maps_settings.as_ref()?, Use::Maps),
+            Target::Preset(name) => Chosen::preset(&startfile::dropped_copy(&self.data, name)),
+        }
+    }
+
+    /// The same, but a start file of yours from the map list must still be there.
+    pub fn settings(&self, target: &Target) -> Result<Option<Chosen>, String> {
+        let chosen = self.chosen(target);
+        match target {
+            Target::Preset(name) if chosen.is_none() => Err(t!("startFiles.gone", name)),
+            _ => Ok(chosen),
         }
     }
 }
@@ -192,6 +227,58 @@ pub struct ServerManager {
     inner: Arc<Mutex<Inner>>,
     store: Arc<Mutex<ConfigStore>>,
     app: Arc<OnceLock<AppHandle>>,
+    hooks: Hooks,
+}
+
+/// `platform::launch_console`: the folder, the start file and the environment it gets.
+type LaunchFn = fn(&Path, &str, &[(&str, &str)]) -> std::io::Result<platform::Launched>;
+
+/// What the manager does to the PC, in one place so the tests can stand in for it: a hidden
+/// process instead of a server in a console window, and no ports, game or map cache touched.
+#[derive(Clone, Copy)]
+struct Hooks {
+    /// Runs a start file from the server folder (in its own console window and job).
+    launch: LaunchFn,
+    /// The RustDedicated.exe the start file (this process id) started, once it has.
+    server_of: fn(u32) -> Option<ProcessHandle>,
+    /// A server from one of these folders that DropLaunch didn't start.
+    find_running: fn(&[PathBuf]) -> Option<Found>,
+    /// Rust's old copies of the map out of the game's cache: lines for the console.
+    clean_game_cache: fn(&Target, &StartContext) -> Vec<(String, &'static str)>,
+    /// Something already listens on the server's ports.
+    port_problem: fn(u16, u16) -> Option<String>,
+    /// Join automatically: opens Rust on this branch and port; a line for the console.
+    join: fn(&str, u16) -> String,
+}
+
+impl Hooks {
+    const REAL: Hooks = Hooks {
+        launch: platform::launch_console,
+        server_of: started_server,
+        find_running,
+        clean_game_cache,
+        port_problem,
+        join: join_now,
+    };
+}
+
+/// The RustDedicated.exe that the start file running as `shell` started.
+fn started_server(shell: u32) -> Option<ProcessHandle> {
+    let found = platform::find_processes(SERVER_EXECUTABLE).into_iter().find(|p| p.parent == shell)?;
+    ProcessHandle::open(found.pid)
+}
+
+/// Join automatically, once the server is ready.
+fn join_now(branch: &str, port: u16) -> String {
+    match client::plan_join(branch, port, true) {
+        Ok(plan) => match plan.state {
+            "started" => t!("serverlog.join.started", game = plan.game),
+            "running" => t!("serverlog.join.running", game = plan.game, connect = plan.connect),
+            "wrong" => t!("serverlog.join.wrong", running = plan.running_game.unwrap_or("Rust"), branch, game = plan.game),
+            _ => t!("serverlog.join.missing", branch, game = plan.game),
+        },
+        Err(e) => e,
+    }
 }
 
 #[derive(Default)]
@@ -201,6 +288,8 @@ struct Inner {
     last: Option<ServerView>,
     lines: VecDeque<ConsoleLine>,
     outbox: Vec<ConsoleLine>,
+    /// The last line's `seq`.
+    seq: u64,
     dirty: bool,
     next_id: u64,
     next_cmd: i32,
@@ -245,6 +334,9 @@ struct Live {
     branch: Option<String>,
     /// The server folder it runs from (each branch has its own).
     dir: PathBuf,
+    /// The key in the plugin's lines (bug reports, kits) for this start: lines without it aren't
+    /// the plugin's.
+    key: Option<String>,
 }
 
 /// A server found running that DropLaunch didn't start (this session), read back from its log.
@@ -285,7 +377,11 @@ impl Live {
             id: self.id,
             title: self.title.clone(),
             map: self.start.as_ref().and_then(|s| s.map.as_ref()).map(|m| m.display().to_string()),
-            procgen: matches!(self.target, Some(Target::Procgen)),
+            procgen: matches!(self.target, Some(Target::Procgen | Target::Preset(_))),
+            preset: match &self.target {
+                Some(Target::Preset(name)) => Some(name.clone()),
+                _ => None,
+            },
             start_file: self.start.as_ref().map(|s| s.path.display().to_string()),
             log_file: self.start.as_ref().and_then(|s| s.log_file.as_ref()).map(|p| p.display().to_string()),
             prefab: self.prefab,
@@ -315,6 +411,17 @@ impl Live {
 }
 
 impl Inner {
+    /// A start in the moment between a restart's stop and its start (or while another start waits
+    /// for its turn) comes instead of it: the waiting one would start by itself once this server
+    /// stops.
+    fn overtake(&mut self, target: &Target) {
+        if let Some(waiting) = self.pending.take() {
+            if waiting.target != *target {
+                self.push(t!("serverlog.pendingDropped", title = waiting.target.title(), next = target.title()), "app");
+            }
+        }
+    }
+
     /// A line from DropLaunch (or an RCON command and its reply).
     fn push(&mut self, text: impl Into<String>, kind: &'static str) {
         let source = if matches!(kind, "cmd" | "reply") { "rcon" } else { "droplaunch" };
@@ -322,7 +429,8 @@ impl Inner {
     }
 
     fn push_from(&mut self, text: impl Into<String>, kind: &'static str, source: &'static str) {
-        let line = ConsoleLine { text: text.into(), kind, source, time: now_ms() };
+        self.seq += 1;
+        let line = ConsoleLine { text: text.into(), kind, source, time: now_ms(), seq: self.seq };
         self.outbox.push(line.clone());
         self.lines.push_back(line);
         while self.lines.len() > KEEP_LINES {
@@ -344,6 +452,7 @@ impl ServerManager {
             inner: Arc::new(Mutex::new(Inner { next_cmd: 1, ..Default::default() })),
             store,
             app: Arc::new(OnceLock::new()),
+            hooks: Hooks::REAL,
         }
     }
 
@@ -405,7 +514,7 @@ impl ServerManager {
         // The game's map cache first, without the lock (a start that has to wait for the running
         // server to stop does it when it's its turn).
         let idle = self.inner.locked().live.is_none();
-        let cleaned = idle.then(|| clean_game_cache(&target, &ctx));
+        let cleaned = idle.then(|| (self.hooks.clean_game_cache)(&target, &ctx));
         let mut inner = self.inner.locked();
         if let Some(live) = inner.live.as_mut() {
             let title = live.title.clone();
@@ -419,12 +528,13 @@ impl ServerManager {
             inner.dirty = true;
             return Ok(StartReply::Queued { title });
         }
+        inner.overtake(&target);
         let live = self.launch(&mut inner, target, prefab, &ctx, cleaned)?;
         let view = live.view(false);
         inner.live = Some(live);
         inner.last = None;
         inner.dirty = true;
-        Ok(StartReply::Started { server: view })
+        Ok(StartReply::Started { server: Box::new(view) })
     }
 
     pub fn stop(&self, force: bool) -> Result<(), String> {
@@ -555,9 +665,9 @@ impl ServerManager {
             }
         }
         let layout = Layout { base: &ctx.base, server_dir: &ctx.server_dir, steamcmd_dir: &ctx.steamcmd_dir };
-        let (start, rewritten) =
-            startfile::ensure(&layout, &target, prefab).map_err(|e| t!("error.startFile", error = e))?;
-        if let Some(problem) = port_problem(start.server_port, start.rcon_port) {
+        let chosen = ctx.settings(&target)?;
+        let (start, rewritten) = startfile::ensure(&layout, &target, prefab, chosen.as_ref()).map_err(|e| t!("error.startFile", error = e))?;
+        if let Some(problem) = (self.hooks.port_problem)(start.server_port, start.rcon_port) {
             return Err(problem);
         }
         if start.made_by_droplaunch() {
@@ -565,6 +675,11 @@ impl ServerManager {
                 inner.push(t!("job.ownerFailed", error = e), "warn");
             }
         }
+        // A new key for the plugin's lines (before the server loads its plugins).
+        let key = playtest::new_key(&ctx.server_dir).unwrap_or_else(|e| {
+            inner.push(t!("serverlog.keyFailed", error = e), "warn");
+            None
+        });
         // The whitelist (the plugin that checks it goes in before the server loads its plugins).
         if let Err(e) = whitelist::write(&ctx.server_dir, ctx.whitelist.as_deref()) {
             inner.push(t!("serverlog.whitelistFailed", error = e), "warn");
@@ -583,10 +698,10 @@ impl ServerManager {
                 Err(_) => return Err(t!("error.logInUse", path = log.display())),
             }
         }
-        for (text, kind) in cleaned.unwrap_or_else(|| clean_game_cache(&target, ctx)) {
+        for (text, kind) in cleaned.unwrap_or_else(|| (self.hooks.clean_game_cache)(&target, ctx)) {
             inner.push(text, kind);
         }
-        let launched = platform::launch_console(&ctx.server_dir, &start.file_name(), &[(LAUNCH_ENV, "1")])
+        let launched = (self.hooks.launch)(&ctx.server_dir, &start.file_name(), &[(LAUNCH_ENV, "1")])
             .map_err(|e| t!("error.startFailed", file = start.file_name(), error = e))?;
 
         inner.next_id += 1;
@@ -621,6 +736,7 @@ impl ServerManager {
             message: None,
             branch: manifest::read_installed(&ctx.server_dir).map(|i| i.branch),
             dir: ctx.server_dir.clone(),
+            key,
         })
     }
 
@@ -655,8 +771,8 @@ impl ServerManager {
         });
         // The slow parts outside the lock: reading back the log of a server that was already
         // running, and the game's map cache for a start that waited.
-        let found = scan_dirs.and_then(|dirs| find_running(&dirs));
-        let cleaned = to_clean.map(|(target, ctx)| (clean_game_cache(&target, &ctx), target));
+        let found = scan_dirs.and_then(|dirs| (self.hooks.find_running)(&dirs));
+        let cleaned = to_clean.map(|(target, ctx)| ((self.hooks.clean_game_cache)(&target, &ctx), target));
 
         let mut inner = self.inner.locked();
         if inner.shutting_down {
@@ -703,7 +819,7 @@ impl ServerManager {
                 let _ = app.emit("server", ServerEvent::Lines { lines });
             }
             if let Some(server) = state {
-                let _ = app.emit("server", ServerEvent::State { server });
+                let _ = app.emit("server", ServerEvent::State { server: server.map(Box::new) });
             }
         }
     }
@@ -718,9 +834,7 @@ impl ServerManager {
         // 1. Find RustDedicated.exe once the start file has started it.
         if live.process.is_none() {
             if let Some(shell) = live.shell_pid {
-                if let Some(found) = platform::find_processes(SERVER_EXECUTABLE).into_iter().find(|p| p.parent == shell) {
-                    live.process = ProcessHandle::open(found.pid);
-                }
+                live.process = (self.hooks.server_of)(shell);
             }
         }
 
@@ -733,12 +847,20 @@ impl ServerManager {
                 if boot::is_noise(&line) {
                     continue;
                 }
-                if let Some(json) = playtest::report_json(&line) {
+                // The plugin's marker with another key (or none): this server may have got its
+                // key after it was found (it ran before DropLaunch was updated). Its folder has
+                // the one the plugin uses.
+                if playtest::has_marker(&line) && !playtest::is_plugin_line(&line, live.key.as_deref()) {
+                    if let Some(key) = playtest::read_key(&live.dir) {
+                        live.key = Some(key);
+                    }
+                }
+                if let Some(json) = playtest::report_json(&line, live.key.as_deref()) {
                     out.push((playtest::describe(json), "ok", "droplaunch"));
                     inner.reports.push(json.to_string());
                     continue;
                 }
-                if let Some(json) = crate::kits::game_kit_json(&line) {
+                if let Some(json) = crate::kits::game_kit_json(&line, live.key.as_deref()) {
                     out.push((crate::kits::describe_game_kit(json), "ok", "droplaunch"));
                     inner.game_kits.push(json.to_string());
                     continue;
@@ -762,15 +884,7 @@ impl ServerManager {
                 // Looking for Rust takes a moment: not while holding the lock.
                 let me = self.clone();
                 std::thread::spawn(move || {
-                    let text = match client::plan_join(&branch, port, true) {
-                        Ok(plan) => match plan.state {
-                            "started" => t!("serverlog.join.started", game = plan.game),
-                            "running" => t!("serverlog.join.running", game = plan.game, connect = plan.connect),
-                            "wrong" => t!("serverlog.join.wrong", running = plan.running_game.unwrap_or("Rust"), branch, game = plan.game),
-                            _ => t!("serverlog.join.missing", branch, game = plan.game),
-                        },
-                        Err(e) => e,
-                    };
+                    let text = (me.hooks.join)(&branch, port);
                     let mut inner = me.inner.locked();
                     inner.push(text, "app");
                     inner.dirty = true;
@@ -828,12 +942,14 @@ impl ServerManager {
         }
 
         // 4. Gone?
+        // Never saw RustDedicated, and the start file still runs after SPAWN_TIMEOUT.
+        let late = live.process.is_none()
+            && Instant::now() > live.spawn_deadline
+            && live.job.as_ref().is_some_and(|j| j.active_processes() > 0);
         let gone = match &live.process {
             Some(process) => !process.is_running(),
             // Never saw RustDedicated: the start file ended early (map missing, ...) or it's late.
-            None => {
-                Instant::now() > live.spawn_deadline || live.job.as_ref().is_some_and(|j| j.active_processes() == 0)
-            }
+            None => late || live.job.as_ref().is_none_or(|j| j.active_processes() == 0),
         };
         if gone {
             let code = live.process.as_ref().and_then(|p| p.exit_code());
@@ -852,10 +968,15 @@ impl ServerManager {
             live.rcon_connected = false;
             let last = live.recent.iter().rev().find(|l| !l.trim().is_empty()).cloned().unwrap_or_default();
             if crashed || died {
-                crate::log::write(&crash_log_line(live, code, died, &last));
+                crate::log::write(&crash_log_line(live, code, died, late, &last));
             }
             live.message = Some(if live.process.is_none() {
-                t!("serverlog.noStart", file = live.start.as_ref().map_or_else(|| t!("serverlog.theStartFile"), |s| s.file_name()))
+                let file = live.start.as_ref().map_or_else(|| t!("serverlog.theStartFile"), |s| s.file_name());
+                if late {
+                    t!("serverlog.noStartLate", file, minutes = SPAWN_TIMEOUT.as_secs() / 60)
+                } else {
+                    t!("serverlog.noStart", file)
+                }
             } else if crashed || died {
                 match code.map(exit_code_text) {
                     Some(code) if died => t!("serverlog.diedCode", code, last),
@@ -916,45 +1037,13 @@ fn find_running(dirs: &[PathBuf]) -> Option<Found> {
     let start = identify_start_file(server_dir, started);
 
     // Catch up on everything it logged so far; the console gets the end of it.
-    let mut boot = Tracker::default();
-    let mut recent = VecDeque::new();
-    let mut lines = VecDeque::new();
-    let mut reports = Vec::new();
+    let key = playtest::read_key(server_dir);
     let mut tail = start.as_ref().and_then(|s| s.log_file.clone()).map(LogTail::new);
-    if let Some(tail) = tail.as_mut() {
-        loop {
-            let read = tail.read_lines();
-            if read.is_empty() {
-                break;
-            }
-            for line in read {
-                boot.feed(&line);
-                if boot::is_noise(&line) {
-                    continue;
-                }
-                if let Some(json) = playtest::report_json(&line) {
-                    reports.push(json.to_string());
-                    lines.push_back(playtest::describe(json));
-                    continue;
-                }
-                recent.push_back(line.clone());
-                if recent.len() > 12 {
-                    recent.pop_front();
-                }
-                lines.push_back(line);
-                if lines.len() > KEEP_LINES / 2 {
-                    lines.pop_front();
-                }
-            }
-        }
-    }
-    let target = start.as_ref().map(|s| match &s.map {
-        Some(map) => Target::Map(map.clone()),
-        None => Target::Procgen,
-    });
+    let caught = tail.as_mut().map(|tail| catch_up(tail, key.as_deref())).unwrap_or_default();
+    let target = start.as_ref().map(|s| startfile::target_of(s, server_dir));
     let title = target.as_ref().map_or_else(|| t!("serverlog.rustServer"), Target::title);
     let prefab = target.as_ref().zip(start.as_ref()).is_some_and(|(t, s)| startfile::is_prefab_file(server_dir, t, &s.path));
-    let ready = boot.ready() || start.as_ref().is_none_or(|s| s.log_file.is_none());
+    let ready = caught.boot.ready() || start.as_ref().is_none_or(|s| s.log_file.is_none());
     let live = Live {
         id: 0,
         title,
@@ -967,7 +1056,7 @@ fn find_running(dirs: &[PathBuf]) -> Option<Found> {
         job: None,
         spawn_deadline: Instant::now(),
         phase: if ready { Phase::Ready } else { Phase::Booting },
-        boot,
+        boot: caught.boot,
         tail,
         rcon: None,
         rcon_connected: false,
@@ -978,11 +1067,55 @@ fn find_running(dirs: &[PathBuf]) -> Option<Found> {
         stop_requested: false,
         stop_deadline: None,
         attached: true,
-        recent,
+        recent: caught.recent,
         branch: manifest::read_installed(server_dir).map(|i| i.branch),
         dir: server_dir.to_path_buf(),
+        key,
     };
-    Some(Found { live, pid, lines, reports })
+    Some(Found { live, pid, lines: caught.lines, reports: caught.reports })
+}
+
+/// What a running server logged so far, read back.
+#[derive(Default)]
+struct CatchUp {
+    boot: Tracker,
+    /// Its last lines (for a crash message).
+    recent: VecDeque<String>,
+    /// The end of the log, for the console.
+    lines: VecDeque<String>,
+    /// Bug reports it logged (with its folder's key).
+    reports: Vec<String>,
+}
+
+/// Everything a server logged so far. `key`: the plugin's in its folder.
+fn catch_up(tail: &mut LogTail, key: Option<&str>) -> CatchUp {
+    let mut caught = CatchUp::default();
+    loop {
+        let read = tail.read_lines();
+        if read.is_empty() {
+            break;
+        }
+        for line in read {
+            caught.boot.feed(&line);
+            if boot::is_noise(&line) {
+                continue;
+            }
+            if let Some(json) = playtest::report_json(&line, key) {
+                caught.reports.push(json.to_string());
+                caught.lines.push_back(playtest::describe(json));
+                continue;
+            }
+            caught.recent.push_back(line.clone());
+            if caught.recent.len() > 12 {
+                caught.recent.pop_front();
+            }
+            caught.lines.push_back(line);
+            if caught.lines.len() > KEEP_LINES / 2 {
+                caught.lines.pop_front();
+            }
+        }
+    }
+    caught
 }
 
 /// Rust's older copies of the map out of the game's map cache, so the game can't load one of them
@@ -1013,9 +1146,13 @@ fn clean_exit(code: u32) -> bool {
 }
 
 /// How a server went down, for droplaunch.log: in English whatever the language, as it's read
-/// in bug reports. `last`: the last line it logged.
-fn crash_log_line(live: &Live, code: Option<u32>, died: bool, last: &str) -> String {
+/// in bug reports. `late`: the start file still ran when DropLaunch gave up waiting for
+/// RustDedicated. `last`: the last line it logged.
+fn crash_log_line(live: &Live, code: Option<u32>, died: bool, late: bool, last: &str) -> String {
     let file = live.start.as_ref().map_or_else(|| "its start file".to_string(), |s| s.file_name());
+    if late {
+        return format!("Server \"{}\": {file} didn't start RustDedicated.exe within {} s and was ended", live.title, SPAWN_TIMEOUT.as_secs());
+    }
     if live.process.is_none() {
         return format!("Server \"{}\": {file} ended before RustDedicated.exe started", live.title);
     }
@@ -1194,16 +1331,365 @@ mod tests {
             message: None,
             branch: None,
             dir: PathBuf::new(),
+            key: None,
         }
+    }
+
+    /// A server found running: only its own folder's key makes a line a report.
+    #[test]
+    fn a_running_server_is_read_back_with_its_key() {
+        let path = std::env::temp_dir().join(format!("droplaunch-catchup-{}.log", std::process::id()));
+        let lines = [
+            r#"[DropLaunch] DLBUG1 {"id":"old","text":"an older plugin's"}"#,
+            r#"[CHAT] [DropLaunch] DLBUG1 {"a":"[76561198000000002] : ","id":"forged-1","name":"The Owner","text":"fake report"}"#,
+            r#"[DropLaunch] DLBUG1 Other999 {"id":"other","text":"another start's"}"#,
+            r#"[2026.11.04 20:15:02] [INFO] [DropLaunch] DLBUG1 Abc123 {"id":"1","name":"Ted","grid":"G12","text":"floating rock"}"#,
+            "Server startup complete",
+        ];
+        std::fs::write(&path, lines.join("\r\n") + "\r\n").unwrap();
+        let caught = catch_up(&mut LogTail::new(path.clone()), Some("Abc123"));
+        assert_eq!(caught.reports, [r#"{"id":"1","name":"Ted","grid":"G12","text":"floating rock"}"#]);
+        assert!(caught.lines.iter().any(|l| l == "Bug report from Ted at G12: floating rock"));
+        // The others show as they are.
+        assert!(caught.lines.iter().any(|l| l.contains("forged-1")));
+        assert!(caught.boot.ready());
+        let none = catch_up(&mut LogTail::new(path.clone()), None);
+        assert!(none.reports.is_empty(), "no key in the folder: no reports");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
     fn crash_log_line_has_the_exit_code_and_last_line() {
         // (This test's own process stands in for RustDedicated.exe: only its presence counts.)
         let live = booting(ProcessHandle::open(std::process::id()));
-        let line = crash_log_line(&live, Some(0xC000_0005), false, " [Rust.MapCache] Map uploaded ");
+        let line = crash_log_line(&live, Some(0xC000_0005), false, false, " [Rust.MapCache] Map uploaded ");
         assert_eq!(line, "Server \"Procedural map\" (its start file) stopped while starting after 52 s, exit code 0xC0000005. Last line: [Rust.MapCache] Map uploaded");
-        assert!(crash_log_line(&live, None, true, "").contains("stopped unexpectedly after 52 s, exit code unknown."));
-        assert_eq!(crash_log_line(&booting(None), None, false, ""), "Server \"Procedural map\": its start file ended before RustDedicated.exe started");
+        assert!(crash_log_line(&live, None, true, false, "").contains("stopped unexpectedly after 52 s, exit code unknown."));
+        assert_eq!(crash_log_line(&booting(None), None, false, false, ""), "Server \"Procedural map\": its start file ended before RustDedicated.exe started");
+        assert_eq!(crash_log_line(&booting(None), None, false, true, ""), "Server \"Procedural map\": its start file didn't start RustDedicated.exe within 180 s and was ended");
+    }
+
+    /// A start in the moment between a restart's stop and its start comes instead of it: the
+    /// restarted map doesn't start by itself once the new server stops.
+    #[test]
+    fn a_start_takes_the_place_of_a_waiting_restart() {
+        let dir = std::env::temp_dir().join(format!("droplaunch-pending-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = ConfigStore::load_from(dir.clone(), dir.join("DropLaunch-data"));
+        let ctx = StartContext::from_store(&store);
+        // (The same through the manager: a_start_after_a_restart_stops_comes_instead.)
+        let mut inner = Inner { pending: Some(Pending { target: Target::Map(dir.join("Old Map.map")), prefab: false, ctx: ctx.clone() }), ..Inner::default() };
+        inner.overtake(&Target::Map(dir.join("New Map.map")));
+        assert!(inner.pending.is_none(), "the restart still waits to start");
+        assert!(inner.lines.back().is_some_and(|l| l.text.contains("Old Map") && l.text.contains("New Map")));
+        // The same map again: it simply starts, nothing to say.
+        inner.pending = Some(Pending { target: Target::Map(dir.join("New Map.map")), prefab: false, ctx });
+        let said = inner.lines.len();
+        inner.overtake(&Target::Map(dir.join("New Map.map")));
+        assert!(inner.pending.is_none());
+        assert_eq!(inner.lines.len(), said);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---------------------------------------------------------------- the manager, with stand-ins
+    // The manager as the window uses it (start, stop, restart, ticks), with a hidden `ping` in a
+    // job in place of the start file and its RustDedicated.exe: no window, no ports, no game.
+
+    thread_local! {
+        /// The start files the manager ran (this test's), and what the stand-in does.
+        static FAKE: std::cell::RefCell<Fake> = std::cell::RefCell::new(Fake::default());
+    }
+
+    #[derive(Default)]
+    struct Fake {
+        launched: Vec<String>,
+        /// The start file never starts the server (it ends after `seconds`).
+        no_server: bool,
+        seconds: u32,
+    }
+
+    #[cfg(windows)]
+    fn fake_launch(dir: &Path, script: &str, _env: &[(&str, &str)]) -> std::io::Result<platform::Launched> {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let seconds = FAKE.with(|f| {
+            let mut f = f.borrow_mut();
+            f.launched.push(script.to_string());
+            f.seconds
+        });
+        let child = std::process::Command::new("ping")
+            .args(["-n", &seconds.max(1).to_string(), "127.0.0.1"])
+            .current_dir(dir)
+            .stdout(std::process::Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()?;
+        // Ends with the test (the job is dropped with the manager).
+        let job = ProcessJob::new()?;
+        job.assign_pid(child.id())?;
+        Ok(platform::Launched { shell_pid: child.id(), job })
+    }
+
+    /// The stand-in start file is its own RustDedicated.exe.
+    fn fake_server_of(shell: u32) -> Option<ProcessHandle> {
+        if FAKE.with(|f| f.borrow().no_server) {
+            return None;
+        }
+        ProcessHandle::open(shell)
+    }
+
+    struct Harness {
+        mgr: ServerManager,
+        dir: PathBuf,
+        ctx: StartContext,
+    }
+
+    impl Harness {
+        #[cfg(windows)]
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("droplaunch-harness-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join("Maps")).unwrap();
+            let store = ConfigStore::load_from(dir.clone(), dir.join("DropLaunch-data"));
+            assert!(!store.config.auto_join, "a test never joins");
+            let ctx = StartContext::from_store(&store);
+            std::fs::create_dir_all(&ctx.server_dir).unwrap();
+            std::fs::write(ctx.server_dir.join(SERVER_EXECUTABLE), b"").unwrap();
+            let mut mgr = ServerManager::new(Arc::new(Mutex::new(store)));
+            mgr.hooks = Hooks {
+                launch: fake_launch,
+                server_of: fake_server_of,
+                find_running: |_| None,
+                clean_game_cache: |_, _| Vec::new(),
+                port_problem: |_, _| None,
+                join: |_, _| "a test never joins".into(),
+            };
+            FAKE.with(|f| *f.borrow_mut() = Fake { seconds: 120, ..Fake::default() });
+            Self { mgr, dir, ctx }
+        }
+
+        fn map(&self, name: &str) -> Target {
+            let path = self.dir.join("Maps").join(format!("{name}.map"));
+            std::fs::write(&path, b"map").unwrap();
+            Target::Map(path)
+        }
+
+        fn start(&self, target: &Target, replace: bool) -> StartReply {
+            self.mgr.start(target.clone(), false, self.ctx.clone(), replace).unwrap()
+        }
+
+        /// Ticks until `done` (10 s at most).
+        fn until(&self, what: &str, done: impl Fn(&Inner) -> bool) {
+            let end = Instant::now() + Duration::from_secs(10);
+            loop {
+                self.mgr.tick();
+                if done(&self.mgr.inner.locked()) {
+                    return;
+                }
+                assert!(Instant::now() < end, "{what}: not within 10 s. Console: {:?}", self.console());
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+
+        fn found(&self) {
+            self.until("RustDedicated found", |i| i.live.as_ref().is_some_and(|l| l.process.is_some()));
+        }
+
+        /// A line in the server's log.
+        fn log(&self, line: &str) {
+            use std::io::Write as _;
+            let file = self.mgr.inner.locked().live.as_ref().and_then(|l| l.start.as_ref()?.log_file.clone()).expect("a log file");
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap(); // (RustDedicated makes it)
+            let mut f = std::fs::OpenOptions::new().create(true).append(true).open(file).unwrap();
+            writeln!(f, "{line}").unwrap();
+        }
+
+        /// The running stand-in ends by itself (killed from outside, as a crash).
+        fn crash(&self) {
+            let pid = self.mgr.inner.locked().live.as_ref().and_then(|l| l.process.as_ref().map(|p| p.pid)).expect("a server");
+            ProcessHandle::open(pid).expect("the stand-in").terminate();
+        }
+
+        fn view(&self) -> ServerView {
+            self.mgr.inner.locked().view().expect("a server shown")
+        }
+
+        fn launched(&self) -> Vec<String> {
+            FAKE.with(|f| f.borrow().launched.clone())
+        }
+
+        fn console(&self) -> Vec<String> {
+            self.mgr.inner.locked().lines.iter().map(|l| l.text.clone()).collect()
+        }
+    }
+
+    impl Drop for Harness {
+        fn drop(&mut self) {
+            // The stand-ins' jobs end them; then the folder can go.
+            if let Some(live) = self.mgr.inner.locked().live.as_mut() {
+                live.kill();
+            }
+            *self.mgr.inner.locked() = Inner::default();
+            for _ in 0..20 {
+                if std::fs::remove_dir_all(&self.dir).is_ok() || !self.dir.exists() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+
+    /// Only lines with the key written for this start are reports or kits (second sweep, H1);
+    /// a key the plugin got later (a server that ran before an update) is read again.
+    #[cfg(windows)]
+    #[test]
+    fn only_lines_with_the_start_key_are_reports() {
+        let h = Harness::new("key");
+        let managed = h.ctx.server_dir.join("carbon").join("managed");
+        std::fs::create_dir_all(&managed).unwrap();
+        std::fs::write(managed.join("Carbon.dll"), b"").unwrap();
+        let map = h.map("Key Map");
+        h.start(&map, false);
+        h.found();
+        let key = playtest::read_key(&h.ctx.server_dir).expect("a key written at the start");
+        assert_eq!(h.mgr.inner.locked().live.as_ref().and_then(|l| l.key.clone()), Some(key.clone()));
+        let report = r#"{"id":"1","name":"Ted","grid":"G12","text":"floating rock"}"#;
+        let kit = r#"{"id":"2","by":"Ted","wear":[],"belt":[{"item":"rifle.ak","amount":1,"slot":0}],"main":[]}"#;
+        h.log(r#"[CHAT] [DropLaunch] DLBUG1 {"a":"[76561198000000002] : ","id":"forged-1","name":"The Owner","text":"fake report"}"#);
+        h.log(r#"[CHAT] [DropLaunch] DLKITSAVE1 {"a":"[76561198000000002] : ","id":"forged-2","by":"The Owner","main":[{"item":"wood","amount":1,"slot":0}]}"#);
+        h.log(r#"[DropLaunch] DLBUG1 {"id":"old","text":"an older plugin's"}"#);
+        h.log(&format!("[2026.11.04 20:15:02] [INFO] [DropLaunch] DLBUG1 {key} {report}"));
+        h.log(&format!("[DropLaunch] DLKITSAVE1 {key} {kit}"));
+        h.until("the report and the kit", |i| !i.reports.is_empty() && !i.game_kits.is_empty());
+        assert_eq!(h.mgr.take_reports(), [report]);
+        assert_eq!(h.mgr.take_game_kits(), [kit]);
+        assert!(h.console().iter().any(|l| l.contains("forged-1")), "a forged line shows as it is");
+
+        // A key written after the server was found (the plugin got it with a newer DropLaunch).
+        let newer = playtest::new_key(&h.ctx.server_dir).unwrap().unwrap();
+        let later = r#"{"id":"3","text":"after the update"}"#;
+        h.log(&format!("[DropLaunch] DLBUG1 {newer} {later}"));
+        h.until("the later report", |i| !i.reports.is_empty());
+        assert_eq!(h.mgr.take_reports(), [later]);
+    }
+
+    /// Restart: the server stops, and the same start file runs again as a new server.
+    #[cfg(windows)]
+    #[test]
+    fn a_restart_runs_the_same_start_file_again() {
+        let h = Harness::new("restart");
+        let map = h.map("Test Map");
+        assert!(matches!(h.start(&map, false), StartReply::Started { .. }));
+        h.found();
+        h.log("Server startup complete");
+        h.until("ready", |i| i.live.as_ref().is_some_and(|l| l.phase == Phase::Ready));
+        let first = h.view().id;
+
+        h.mgr.restart(h.ctx.clone()).unwrap();
+        assert_eq!(h.view().phase, Phase::Stopping);
+        h.until("stopped", |i| i.live.is_none());
+        assert!(h.view().restarting, "shown as restarting while it waits");
+        h.until("started again", |i| i.live.is_some());
+        let view = h.view();
+        assert!(view.id > first);
+        assert_eq!(view.phase, Phase::Booting);
+        let launched = h.launched();
+        assert_eq!(launched.len(), 2);
+        assert_eq!(launched[0], launched[1]);
+        assert!(h.mgr.inner.locked().pending.is_none());
+    }
+
+    /// Another map while one runs: asked first (Busy), then it waits for the first to stop.
+    #[cfg(windows)]
+    #[test]
+    fn another_map_waits_for_the_running_server() {
+        let h = Harness::new("replace");
+        let (first, second) = (h.map("First"), h.map("Second"));
+        h.start(&first, false);
+        h.found();
+        assert!(matches!(h.start(&second, false), StartReply::Busy { .. }));
+        assert_eq!(h.launched().len(), 1, "nothing started while it asks");
+        assert!(matches!(h.start(&second, true), StartReply::Queued { .. }));
+        h.until("the second map started", |i| i.live.as_ref().is_some_and(|l| l.target.as_ref() == Some(&second)));
+        let launched = h.launched();
+        assert_eq!(launched.len(), 2);
+        assert_ne!(launched[0], launched[1]);
+    }
+
+    /// A start right after a restart's stop comes instead of the restart (M1, through the manager).
+    #[cfg(windows)]
+    #[test]
+    fn a_start_after_a_restart_stops_comes_instead() {
+        let h = Harness::new("overtake");
+        let (old, new) = (h.map("Old Map"), h.map("New Map"));
+        h.start(&old, false);
+        h.found();
+        h.mgr.restart(h.ctx.clone()).unwrap();
+        // One tick at a time: the stop is seen, the restart not started yet.
+        h.until("stopped", |i| i.live.is_none());
+        assert!(h.mgr.inner.locked().pending.is_some());
+        assert!(matches!(h.start(&new, false), StartReply::Started { .. }));
+        for _ in 0..5 {
+            h.mgr.tick();
+        }
+        assert_eq!(h.launched().len(), 2);
+        assert!(h.mgr.inner.locked().live.as_ref().is_some_and(|l| l.target.as_ref() == Some(&new)));
+        assert!(h.console().iter().any(|l| l.contains("Old Map") && l.contains("New Map")));
+    }
+
+    /// A server that ends by itself while starting is a crash, and nothing starts again.
+    #[cfg(windows)]
+    #[test]
+    fn a_crash_while_starting_is_reported() {
+        let h = Harness::new("crash");
+        let map = h.map("Test Map");
+        h.start(&map, false);
+        h.found();
+        h.crash();
+        h.until("gone", |i| i.live.is_none());
+        let view = h.view();
+        assert_eq!(view.phase, Phase::Crashed);
+        assert!(view.message.is_some_and(|m| m.contains("stopped while starting (exit code 1)")), "{:?}", h.console());
+        for _ in 0..5 {
+            h.mgr.tick();
+        }
+        assert_eq!(h.launched().len(), 1, "a crash doesn't start it again");
+    }
+
+    /// "Restarting in 5 seconds" (a plugin or the restart command), then it ends: started again.
+    #[cfg(windows)]
+    #[test]
+    fn a_server_that_restarts_itself_is_started_again() {
+        let h = Harness::new("selfrestart");
+        let map = h.map("Test Map");
+        h.start(&map, false);
+        h.found();
+        h.log("Server startup complete");
+        h.log("Restarting in 5 seconds");
+        h.until("the restart is announced", |i| i.live.as_ref().is_some_and(|l| l.boot.restart_announced && l.phase == Phase::Ready));
+        h.crash();
+        h.until("gone", |i| i.live.is_none());
+        assert_eq!(h.view().phase, Phase::Stopped, "not a crash");
+        h.until("started again", |i| i.live.is_some());
+        assert_eq!(h.launched().len(), 2);
+    }
+
+    /// A start file that ends without starting RustDedicated is reported at once (not after the
+    /// 3 minutes a slow start gets).
+    #[cfg(windows)]
+    #[test]
+    fn a_start_file_that_ends_without_a_server_is_reported_at_once() {
+        let h = Harness::new("nostart");
+        FAKE.with(|f| {
+            let mut f = f.borrow_mut();
+            f.no_server = true;
+            f.seconds = 1;
+        });
+        let map = h.map("Test Map");
+        h.start(&map, false);
+        h.until("gone", |i| i.live.is_none());
+        let view = h.view();
+        assert_eq!(view.phase, Phase::Crashed);
+        assert!(view.message.is_some_and(|m| m.contains("didn't start the server")), "{:?}", h.console());
     }
 }

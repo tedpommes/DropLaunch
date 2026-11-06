@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>DropLaunch</title>
     <link rel="stylesheet" href="styles.css" />
+    <!-- The theme in use, before anything shows (theme.js keeps this copy up to date). -->
+    <script>
+      try {
+        for (const [name, value] of Object.entries(JSON.parse(localStorage.getItem("droplaunch.theme")) ?? {})) document.documentElement.style.setProperty(name, value);
+      } catch {}
+    </script>
   </head>
   <body class="simple">
     <svg width="0" height="0" style="position: absolute" aria-hidden="true">
@@ -51,6 +57,7 @@
         <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z" /></symbol>
         <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8h.01" /></symbol>
         <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></symbol>
+        <symbol id="i-palette" viewBox="0 0 24 24"><path d="M12 3a9 9 0 0 0 0 18c1.1 0 1.8-.8 1.8-1.8 0-.5-.2-.9-.5-1.2-.3-.3-.5-.7-.5-1.2 0-1 .8-1.8 1.8-1.8h2.1a4.3 4.3 0 0 0 4.3-4.3C21 6.4 17 3 12 3z" /><circle cx="7.5" cy="11.5" r="1.2" /><circle cx="10.5" cy="7.4" r="1.2" /><circle cx="15.2" cy="7.8" r="1.2" /></symbol>
         <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></symbol>
         <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8.5a6 6 0 0 0-12 0c0 6.5-2.5 8.5-2.5 8.5h17S18 15 18 8.5M13.7 20.5a2 2 0 0 1-3.4 0" /></symbol>
         <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 20h4.5L19.5 9a2.1 2.1 0 0 0-3-3L5.5 17v3z" /><path d="M14.5 8l3 3" /></symbol>
@@ -474,6 +481,7 @@
             <span class="check-text" data-t="setup.autoContinue"></span>
           </label>
           <button class="btn btn-danger" id="setup-cancel" hidden><svg><use href="#i-x" /></svg><span data-t="common.cancel"></span></button>
+          <button class="btn btn-primary btn-lg" id="setup-next" hidden><span data-t="setup.next"></span><svg><use href="#i-arrow-right" /></svg></button>
           <button class="btn btn-primary btn-lg" id="setup-fix"><svg><use href="#i-wrench" /></svg><span id="setup-fix-label" data-t="setup.fix"></span></button>
           <button class="btn btn-primary btn-lg countdown" id="setup-close" hidden><span id="setup-close-label" data-t="setup.continue"></span><i class="countdown-bar" id="setup-countdown"></i></button>
         </div>

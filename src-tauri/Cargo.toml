@@ -1,6 +1,6 @@
 [package]
 name = "droplaunch"
-version = "2.0.1"
+version = "2.0.3"
 description = "DropLaunch - Rust map testing made simple"
 authors = ["TedPommes"]
 license = "GPL-3.0-or-later"

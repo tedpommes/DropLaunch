@@ -25,19 +25,44 @@ Needs Rust (stable, MSVC on Windows). No Node.js: the UI is plain HTML/CSS/JS (E
 ```
 cd src-tauri
 cargo build --release        # -> src-tauri/target/release/droplaunch.exe
-cargo test                   # start files, map scan, boot stages, parser/screen model, SteamCMD replays
+cargo test                   # start files, map scan, boot stages, parser/screen model, SteamCMD replays,
+                             # the server manager (start, restart, crash...) with stand-in processes
+cargo clippy --all-targets   # no warnings now; GitHub's build runs it too (an error fails the build)
 ```
+
+The Windows manifest (Common Controls 6, which Tauri's dialogs need) comes from the linker for
+every exe, DropLaunch and the test exes alike (`build.rs`, `manifest()`); tauri-build is told
+not to add its own, which only DropLaunch.exe would get. A test exe without it doesn't load as
+soon as a test reaches the server manager (`STATUS_ENTRYPOINT_NOT_FOUND`).
+
+The server manager's tests (`server/mod.rs`, `Harness`) run a hidden `ping` in a job in place of
+a start file and its RustDedicated.exe (`Hooks`): no console window, ports, game or map cache
+are touched, and Join automatically is off.
+
+The window has a content security policy (`tauri.conf.json`, `app.security.csp`): scripts only
+from `ui/` (plus the small theme script in `index.html`, whose hash Tauri adds when it builds),
+pictures from `ui/`, `blob:` and `data:` (kit items, avatars, map icons), requests only to `ui/`
+and Tauri's IPC, inline styles allowed (`el()` sets style attributes; Tauri is told not to add
+hashes to `style-src`, which would switch `'unsafe-inline'` off). Text reaches the page through
+`textContent` (`el({ text })`, `rich()`), never as HTML. Something that loads from elsewhere
+needs its source added there first.
 
 ## Layout
 
 ```
-ui/                    index.html, styles.css, app.js (+ i18n.js, settings.js, kits.js, guide.js, maps.js, server.js, console.js, playtest.js, rent.js, mapcanvas.js, mapviewer.js, graph.js, game.js, updates.js, about.js, layout.js, menu.js, dropdown.js, util.js), licenses.json (third-party notices, generated), hosts/ (hosting companies' logos), kits/items.json (Rust's item list), lang/en.json (every text: the built-in English language file)
+ui/                    index.html, styles.css, app.js (+ i18n.js, theme.js, settings.js, kits.js, guide.js, maps.js, server.js, console.js, playtest.js, rent.js, mapcanvas.js, mapviewer.js, graph.js, game.js, updates.js, about.js, layout.js, menu.js, dropdown.js, util.js), licenses.json (third-party notices, generated), hosts/ (hosting companies' logos), kits/items.json (Rust's item list), lang/en.json (every text: the built-in English language file), themes/ (the four themes that come with it)
 src-tauri/src/
   lib.rs               app setup (single instance + opened files, dialog plugin, commands)
   commands.rs          what the UI can call
   lang.rs              texts: English built in (ui/lang/en.json), language files next to the exe or dropped on it, t!()
   jobs.rs              setup / install / update / verify / Oxide re-apply as event streams
-  config.rs            settings in the app data (one entry per folder, droplaunch.json moved in), first-start folder detection, one server folder per branch
+  config.rs            settings in DropLaunch-data next to the exe (an entry per folder, droplaunch.json moved in), first-start folder detection, one server folder per branch
+  appdata.rs           what older versions kept in the user's app data, moved into DropLaunch-data
+  assets.rs            dropped assets (dropped.json): what was dropped on DropLaunch, by kind
+  theme.rs             themes: the four built in, theme files dropped or saved
+  log.rs               droplaunch.log (background errors and panics)
+  sync.rs              locks that keep working after a panic
+  http.rs              the HTTP client for downloads (Windows' own TLS)
   concmd.rs            the server's console commands for autocomplete (read from its .NET DLLs)
   startfile.rs         start_*.bat and update_server.bat: writing and reading them back
   maps.rs              map list, dropped files and zips
@@ -45,11 +70,11 @@ src-tauri/src/
   kits.rs              kits: saved kits, giving them over RCON (plugin slots or inventory.giveto), item pictures
   playtest/            bug reports from Rust's chat: the server plugin (DropLaunchPlaytest.cs), reports
                        per map, testers' positions, teleport; mapview.rs draws a map from its .map file
-  net.rs               this PC's network address
   server/              running servers: launch, log-based boot stages and hints, RCON, Steam query,
                        stop/restart, re-attach
   mods.rs              Carbon / Oxide / RustEdit extension, Oxide patch check
   owner.rs             the Steam account on this PC, server owner in users.cfg
+  whitelist.rs         who can join: whitelist.json for the DropLaunch plugin
   client.rs            the Rust game on this PC and its map cache
   toast.rs             Windows notifications
   updater.rs           self-update from GitHub releases (signed latest.json)

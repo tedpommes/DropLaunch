@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-/// The plugin's data file, under the framework's data folder.
-const DATA_DIR: &str = "DropLaunch";
+/// The plugin's data folder, under the framework's data folder (its key goes there too).
+pub const DATA_DIR: &str = "DropLaunch";
 const DATA_FILE: &str = "whitelist.json";
 
 #[derive(Serialize)]
