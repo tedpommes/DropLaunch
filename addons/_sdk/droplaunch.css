@@ -1,0 +1,450 @@
+/*!
+ * DropLaunch add-on styles, API version 1. MIT licence.
+ * <link rel="stylesheet" href="../_sdk/droplaunch.css"> gives an add-on DropLaunch's look: the
+ * theme's colours arrive as CSS variables (droplaunch.js puts them on), these are the defaults.
+ */
+:root {
+  --bg: #1e2028;
+  --card: #2a2c35;
+  --inset: #23252d;
+  --console: #17181d;
+  --popup: #30323c;
+  --line: #ffffff0f;
+  --line-strong: #ffffff1f;
+  --overlay-rgb: 255 255 255;
+  --shadow-rgb: 0 0 0;
+  --text: #b2b7bf;
+  --text-strong: #eef0f4;
+  --muted: #80868f;
+  --faint: #5d626b;
+  --accent: #7a95e3;
+  --accent-rgb: 122 149 227;
+  --accent-hover: #8ca4ea;
+  --on-accent: #ffffff;
+  --ok: #4cc38a;
+  --ok-rgb: 76 195 138;
+  --warn: #e6b450;
+  --warn-rgb: 230 180 80;
+  --danger: #ef6a62;
+  --danger-rgb: 239 106 98;
+  --font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --mono: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+  --radius: 10px;
+  color-scheme: dark;
+}
+
+:root[data-mode="light"] {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+/* See-through: the page sits on DropLaunch's card (a tab) or in a card (More options). */
+body {
+  background: transparent;
+  color: var(--text);
+  font: 13px/1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  color: var(--text-strong);
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+h3 {
+  font-size: 15px;
+}
+
+a {
+  color: var(--accent);
+}
+
+code,
+.dl-mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.dl-muted {
+  color: var(--muted);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--overlay-rgb) / 0.1);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ---------- buttons ---------- */
+.dl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: rgb(var(--overlay-rgb) / 0.06);
+  color: var(--text-strong);
+  font: 500 13px var(--font);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dl-btn:hover:not(:disabled) {
+  background: rgb(var(--overlay-rgb) / 0.1);
+}
+
+.dl-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.dl-btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--on-accent);
+}
+
+.dl-btn.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.dl-btn.danger {
+  background: rgb(var(--danger-rgb) / 0.16);
+  border-color: rgb(var(--danger-rgb) / 0.4);
+  color: var(--danger);
+}
+
+.dl-btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text);
+}
+
+.dl-btn.small {
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.dl-btn:focus-visible,
+.dl-input:focus-visible,
+.dl-menu-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ---------- inputs ---------- */
+.dl-input {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--inset);
+  color: var(--text-strong);
+  font: 13px var(--font);
+  min-width: 0;
+}
+
+textarea.dl-input {
+  height: auto;
+  min-height: 70px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+select.dl-input {
+  padding-right: 6px;
+}
+
+.dl-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.dl-check input {
+  accent-color: var(--accent);
+}
+
+/* ---------- surfaces ---------- */
+.dl-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+
+.dl-badge {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 99px;
+  background: rgb(var(--accent-rgb) / 0.16);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.dl-badge.ok {
+  background: rgb(var(--ok-rgb) / 0.14);
+  color: var(--ok);
+}
+
+.dl-badge.warn {
+  background: rgb(var(--warn-rgb) / 0.16);
+  color: var(--warn);
+}
+
+.dl-badge.danger {
+  background: rgb(var(--danger-rgb) / 0.14);
+  color: var(--danger);
+}
+
+/* Segmented tabs: <div class="dl-tabs"><button aria-selected="true">…</button>…</div> */
+.dl-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+}
+
+.dl-tabs button {
+  height: 28px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: 600 13px var(--font);
+  cursor: pointer;
+}
+
+.dl-tabs button[aria-selected="true"] {
+  background: var(--card);
+  color: var(--text-strong);
+  box-shadow: 0 1px 2px rgb(var(--shadow-rgb) / 0.25);
+}
+
+/* ---------- tables ---------- */
+.dl-table-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.dl-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.dl-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--inset);
+  color: var(--muted);
+  font-weight: 600;
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line-strong);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.dl-table th[data-sort] {
+  cursor: pointer;
+}
+
+.dl-table th[aria-sort="ascending"]::after {
+  content: " ▲";
+  font-size: 9px;
+}
+
+.dl-table th[aria-sort="descending"]::after {
+  content: " ▼";
+  font-size: 9px;
+}
+
+.dl-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+
+.dl-table tbody tr:hover {
+  background: rgb(var(--overlay-rgb) / 0.03);
+}
+
+.dl-table tbody tr.selected {
+  background: rgb(var(--accent-rgb) / 0.16);
+}
+
+.dl-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.dl-empty {
+  padding: 28px 12px;
+  text-align: center;
+  color: var(--muted);
+}
+
+/* ---------- menus (droplaunch.ui.menu) ---------- */
+.dl-menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 190px;
+  padding: 5px;
+  border-radius: 10px;
+  background: var(--popup);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 10px 30px rgb(var(--shadow-rgb) / 0.4);
+}
+
+.dl-menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-strong);
+  font: 13px var(--font);
+  text-align: left;
+  cursor: pointer;
+}
+
+.dl-menu-item:hover:not(:disabled),
+.dl-menu-item:focus-visible {
+  background: rgb(var(--overlay-rgb) / 0.08);
+}
+
+.dl-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.dl-menu-item > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dl-menu {
+  max-width: 280px;
+}
+
+.dl-menu-item.danger {
+  color: var(--danger);
+}
+
+.dl-menu-item.has-sub::after {
+  content: "›";
+  margin-left: auto;
+  padding-left: 16px;
+  color: var(--muted);
+}
+
+.dl-menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line-strong);
+}
+
+.dl-submenu {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: -5px;
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.dl-menu.flip .dl-submenu {
+  left: auto;
+  right: 100%;
+}
+
+.dl-menu-item.has-sub:hover > .dl-submenu,
+.dl-menu-item.has-sub:focus-within > .dl-submenu {
+  display: block;
+}
+
+/* ---------- dialogs (droplaunch.ui.form, confirm, prompt) ---------- */
+.dl-modal-back {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgb(var(--shadow-rgb) / 0.45);
+}
+
+.dl-modal {
+  width: min(420px, calc(100vw - 32px));
+  padding: 18px;
+  border-radius: 14px;
+  background: var(--card);
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 20px 50px rgb(var(--shadow-rgb) / 0.45);
+}
+
+.dl-modal p {
+  margin: 0 0 12px;
+}
+
+.dl-field {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dl-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}

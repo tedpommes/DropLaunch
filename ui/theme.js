@@ -22,12 +22,18 @@ export function color(name) {
   return colors.get(name);
 }
 
-function apply(theme) {
+/** A theme's colours as CSS variables, each with its -rgb triplet (add-on frames get these too). */
+export function cssVars(theme) {
   const vars = {};
-  for (const [key, value] of Object.entries(theme.colors)) {
+  for (const [key, value] of Object.entries(theme?.colors ?? {})) {
     vars[`--${key}`] = value;
     vars[`--${key}-rgb`] = triplet(value);
   }
+  return vars;
+}
+
+function apply(theme) {
+  const vars = cssVars(theme);
   const root = document.documentElement;
   for (const [name, value] of Object.entries(vars)) root.style.setProperty(name, value);
   root.dataset.mode = theme.mode;

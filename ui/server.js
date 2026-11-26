@@ -1,6 +1,6 @@
 // The server panel (selected map / running server with boot progress, players, Join, Stop,
 // Restart) and the console (the server's log + commands over RCON).
-import { $, el, icon, invoke, fmtBytes, fmtWhen, fmtDuration, fileName, toast, copyText, followScroll, desktopNotify, onNotificationClick, afterJoin, rustGameFor } from "./util.js";
+import { $, el, icon, invoke, fmtBytes, fmtWhen, fmtDuration, fileName, toast, copyText, followScroll, desktopNotify, onNotificationClick, afterJoin, rustGameFor, pointAt, revealFile, holdDuringPress } from "./util.js";
 import { initConsoleInput } from "./console.js";
 import { LiveGraph, fmtRate, niceBytes, niceCeil } from "./graph.js";
 import { t, rich, fmtList } from "./i18n.js";
@@ -126,6 +126,25 @@ export function initServer(ctx) {
   const announcedStuck = new Set();
   const consoleBox = $("console");
   const consoleScroll = followScroll(consoleBox);
+
+  /** The Maps page with the server on it (from Settings or bug reports): where a toast led. */
+  function toMaps() {
+    ctx.settings?.close();
+    ctx.setTab("maps");
+  }
+
+  /** The console, at its end, pointed at. */
+  function showConsole() {
+    toMaps();
+    consoleScroll.bottom();
+    pointAt(consoleBox);
+  }
+
+  /** Something in the server's card (its Join button, a hint), else the card. */
+  const showInPanel = (selector) => {
+    toMaps();
+    pointAt(() => $("server-panel").querySelector(selector) ?? (isLive() ? $("server-panel") : null));
+  };
   // The command line goes wherever the console goes (kept by reference: it moves around).
   const consoleForm = $("console-form");
   const consoleInput = $("console-input");
@@ -145,6 +164,8 @@ export function initServer(ctx) {
   // ---------------------------------------------------------------- panel
   function render() {
     const panel = $("server-panel");
+    // Not under a button being pressed (Join in Rust): that click would be lost.
+    if (holdDuringPress(panel, render)) return;
     // Its place: the side column with more options, under the maps in the simple view.
     const home = ctx.expanded ? document.querySelector("#view-maps .col-side") : document.querySelector("#view-maps .col-main");
     // (Above the Kits card in the side column.)
@@ -476,7 +497,7 @@ export function initServer(ctx) {
       if (file) {
         lastProfile = file;
         appendLines([{ text: t("profiler.savedLine", { file }), kind: "ok", source: "droplaunch", time: Date.now() }]);
-        toast(t("profiler.savedToast", { file: fileName(file) }), "ok");
+        toast(t("profiler.savedToast", { file: fileName(file) }), "ok", () => revealFile(file));
       } else {
         toast(t("profiler.notSaved", { reply: reply.trim() || t("profiler.noAnswer") }), "warn");
       }
@@ -492,7 +513,7 @@ export function initServer(ctx) {
   /** Join with the Rust game the server's branch needs (Rust, or Rust - Staging Branch). */
   function joinButton(v) {
     const game = rustGameFor(v.branch);
-    return el("button", { class: "btn btn-primary", onclick: join, title: t("join.button.title", { game: game.name }) }, icon("join"), el("span", { text: game.button }));
+    return el("button", { class: "btn btn-primary join-btn", onclick: join, title: t("join.button.title", { game: game.name }) }, icon("join"), el("span", { text: game.button }));
   }
 
   /** "F1 → client.connect 127.0.0.1:28015" (only once the server is ready). */
@@ -731,7 +752,7 @@ export function initServer(ctx) {
   function announceStuck(v) {
     if (announcedStuck.has(v.id)) return;
     announcedStuck.add(v.id);
-    toast(t("hint.stuck.toast", { title: v.title }), "warn");
+    toast(t("hint.stuck.toast", { title: v.title }), "warn", () => showInPanel(".hint"));
     if (!document.hasFocus()) {
       // Flashes the taskbar button until DropLaunch is looked at.
       window.__TAURI__.window?.getCurrentWindow?.().requestUserAttention?.(1).catch(() => {});
@@ -829,6 +850,8 @@ export function initServer(ctx) {
       const paths = await invoke("create_start_file", { target: targetOf(m) });
       toast(
         paths.length > 1 ? t("server.startFiles.ready", { files: fmtList(paths.map(fileName)) }) : t("server.startFile.ready", { file: fileName(paths[0]) }),
+        "",
+        () => revealFile(paths[0]),
       );
       await ctx.refresh();
       await ctx.maps.reload();
@@ -905,7 +928,7 @@ export function initServer(ctx) {
     if (before?.id !== view?.id) dismissed = null;
     const phase = view?.phase ?? null;
     if (before && view && before.id === view.id && lastPhase !== "ready" && phase === "ready") {
-      toast(t("server.readyToast", { title: view.title, connect: view.connect }), "ok");
+      toast(t("server.readyToast", { title: view.title, connect: view.connect }), "ok", () => showInPanel(".join-btn"));
       if (!ctx.state?.autoJoin) desktopNotify({ tag: "ready", title: t("server.ready.title", { title: view.title }), body: t("server.ready.body"), action: "join" });
     }
     lastPhase = phase;
@@ -954,5 +977,6 @@ export function initServer(ctx) {
     bottom: consoleScroll.bottom,
     makeStartFile,
     note: (text) => appendLines([{ text, kind: "error", source: "droplaunch", time: Date.now() }]),
+    showConsole,
   };
 }

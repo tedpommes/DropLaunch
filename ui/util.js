@@ -79,20 +79,156 @@ export const fileName = (path) => (path ? path.split(/[\\/]/).pop() : "");
 export const buildNum = (id) => Number.parseInt(id, 10) || 0;
 
 let toastTimer = null;
-export function toast(message, kind = "") {
+/** Where the toast that shows leads (null: it only says something). */
+let toastGo = null;
+let toastWired = false;
+
+function hideToast() {
+  clearTimeout(toastTimer);
+  $("toast").hidden = true;
+  toastGo = null;
+}
+
+/** The toast stays while the mouse is on it, then goes a moment after it left. */
+function wireToast(box) {
+  toastWired = true;
+  box.addEventListener("mouseenter", () => clearTimeout(toastTimer));
+  box.addEventListener("mouseleave", () => {
+    clearTimeout(toastTimer);
+    if (!box.hidden) toastTimer = setTimeout(hideToast, 2000);
+  });
+  const follow = () => {
+    const go = toastGo;
+    if (!go) return;
+    hideToast();
+    Promise.resolve()
+      .then(go)
+      .catch((err) => toast(String(err), "error"));
+  };
+  box.addEventListener("click", follow);
+  box.addEventListener("keydown", (e) => {
+    if (toastGo && (e.key === "Enter" || e.key === " ")) {
+      e.preventDefault();
+      follow();
+    }
+  });
+}
+
+/**
+ * A short message at the top. `go`: what it's about, when that's somewhere to go (a page, a card,
+ * a setting, a file): the toast is a button then, with an arrow, and a click goes there.
+ */
+export function toast(message, kind = "", go = null) {
   const box = $("toast");
-  box.textContent = message;
-  box.className = `toast ${kind}`.trim();
+  if (!toastWired) wireToast(box);
+  toastGo = typeof go === "function" ? go : null;
+  box.replaceChildren(el("span", { class: "toast-text", text: message }), toastGo ? icon("arrow-right", "toast-go") : null);
+  box.className = `toast ${kind}${toastGo ? " leads" : ""}`.replace(/\s+/g, " ").trim();
+  if (toastGo) {
+    box.setAttribute("role", "button");
+    box.tabIndex = 0;
+  } else {
+    box.setAttribute("role", "status");
+    box.removeAttribute("tabindex");
+  }
   box.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (box.hidden = true), Math.min(9000, 3500 + message.length * 40));
+  // One that leads somewhere stays a little longer: there's something to do with it.
+  toastTimer = setTimeout(hideToast, Math.min(toastGo ? 11000 : 9000, (toastGo ? 5000 : 3500) + message.length * 40));
 }
+
+/**
+ * Draws the eye to `node` (where a toast led): scrolled into view and outlined for a moment.
+ * `node` can be a function that finds it: tried for a second, for what's still being drawn.
+ */
+export function pointAt(node) {
+  const find = typeof node === "function" ? node : () => node;
+  const shows = (n) => Boolean(n?.isConnected && n.getClientRects().length);
+  let tries = 0;
+  let pointed = null;
+  const mark = (target) => {
+    pointed = target;
+    target.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    target.classList.remove("pointed");
+    void target.offsetWidth;
+    target.classList.add("pointed");
+    setTimeout(() => target.classList.remove("pointed"), 1900);
+  };
+  const attempt = () => {
+    const target = find();
+    if (!shows(target)) {
+      if (++tries < 30) setTimeout(attempt, 50);
+      return;
+    }
+    mark(target);
+  };
+  // A list drawn again just after (its rows replaced): the new one is pointed at instead.
+  const again = () => {
+    const target = find();
+    if (pointed && target !== pointed && shows(target)) mark(target);
+  };
+  setTimeout(attempt, 30);
+  if (typeof node === "function") for (const ms of [250, 600, 1200]) setTimeout(again, ms);
+}
+
+/** Shows a file in Explorer (where a toast about a saved file leads). */
+export const revealFile = (path) => invoke("reveal", { path });
+
+// ---------------------------------------------------------------- redraws wait for a press
+// A click is the mouse going down and up on the same element: drawn anew in between (the
+// window got focus with that very press and DropLaunch looked again, a server event came in),
+// the button under the mouse is a new one and the browser drops the click. Clicking in from
+// Rust or Discord did that often enough to seem random.
+/** What the left button went down on (while it's down), and when. */
+let pressedIn = null;
+let pressedAt = 0;
+/** Redraws held back until the press is over (one per box: the last one asked for). */
+const afterPress = new Map();
+/** A press longer than this isn't a click (dragging, selecting): redraws go ahead. */
+const LONGEST_PRESS = 5000;
+window.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  pressedIn = e.target;
+  pressedAt = Date.now();
+}, true);
+function released() {
+  if (!pressedIn) return;
+  pressedIn = null;
+  if (!afterPress.size) return;
+  const waiting = [...afterPress.values()];
+  afterPress.clear();
+  // After the click (which comes right after the button goes up).
+  setTimeout(() => waiting.forEach((draw) => draw()), 0);
+}
+for (const name of ["pointerup", "pointercancel", "dragend"]) window.addEventListener(name, released, true);
+window.addEventListener("blur", released);
+
+/**
+ * Call first thing in a function that draws `box` anew: true while the mouse button is down
+ * inside it, and `draw` runs once the press is over (after its click) instead.
+ */
+export function holdDuringPress(box, draw) {
+  if (!pressedIn || !box?.contains(pressedIn) || Date.now() - pressedAt > LONGEST_PRESS) return false;
+  afterPress.set(box, draw);
+  return true;
+}
+
+/** The question that's open, or the last one that was: the next one waits for its answer. */
+let lastQuestion = Promise.resolve();
 
 /**
  * Ask something. `choices` are extra buttons ({ label, value, primary }); resolves with the
  * chosen value, or false for Cancel / Escape. `cancel: false`: no Cancel button (Escape still).
+ * One question at a time: a second one waits until the first is answered (there's one window
+ * for them, and a question that took another's place left that one without an answer).
  */
-export function confirmDialog({ title, text, ok = t("common.continue"), choices, cancel: withCancel = true }) {
+export function confirmDialog(question) {
+  const asked = lastQuestion.then(() => ask(question));
+  lastQuestion = asked.catch(() => {});
+  return asked;
+}
+
+function ask({ title, text, ok = t("common.continue"), choices, cancel: withCancel = true }) {
   return new Promise((resolve) => {
     $("modal-title").textContent = title;
     // Text, or text and nodes (a coloured download size).

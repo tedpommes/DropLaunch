@@ -9,6 +9,7 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::advanced::Link;
 use crate::archive;
 use crate::steamcmd::CancelToken;
 use crate::sync::Locked;
@@ -42,7 +43,7 @@ pub(crate) const CARBON_URL: &str = "https://github.com/CarbonCommunity/Carbon/r
 pub(crate) const OXIDE_URL: &str = "https://github.com/OxideMod/Oxide.Rust/releases/latest/download/Oxide.Rust.zip";
 #[cfg(not(windows))]
 pub(crate) const OXIDE_URL: &str = "https://github.com/OxideMod/Oxide.Rust/releases/latest/download/Oxide.Rust-linux.zip";
-const RUSTEDIT_URL: &str = "https://raw.githubusercontent.com/k1lly0u/Oxide.Ext.RustEdit/master/Oxide.Ext.RustEdit.dll";
+pub(crate) const RUSTEDIT_URL: &str = "https://raw.githubusercontent.com/k1lly0u/Oxide.Ext.RustEdit/master/Oxide.Ext.RustEdit.dll";
 const RUSTEDIT_DLL: &str = "Oxide.Ext.RustEdit.dll";
 
 fn managed_dir(server_dir: &Path) -> PathBuf {
@@ -101,24 +102,25 @@ fn oxide_patched(server_dir: &Path) -> bool {
 
 const OXIDE_MARKER: &[u8] = b"Oxide.Core";
 
-/// Download the framework's latest release and unpack it into the server folder.
+/// Download the framework's latest release (from Settings › Advanced's link when one is set) and
+/// unpack it into the server folder.
 pub fn install(
     framework: Framework,
     server_dir: &Path,
     cancel: &CancelToken,
     progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<()> {
-    let url = match framework {
-        Framework::Carbon => CARBON_URL,
-        Framework::Oxide => OXIDE_URL,
+    let link = match framework {
+        Framework::Carbon => Link::Carbon,
+        Framework::Oxide => Link::Oxide,
         Framework::None => return Ok(()),
     };
     let current = detect(server_dir);
     if current != Framework::None && current != framework {
         bail!(t!("mods.error.switch", framework = current.label()));
     }
-    let file = server_dir.join(url.rsplit('/').next().unwrap_or("framework.zip"));
-    archive::download(url, &file, cancel, progress)?;
+    let file = server_dir.join(link.file_name());
+    archive::download(&link.url(), &file, cancel, progress)?;
     let unpacked = archive::extract(&file, server_dir);
     let _ = std::fs::remove_file(&file);
     unpacked?;
@@ -136,8 +138,18 @@ pub fn install_rustedit(server_dir: &Path, cancel: &CancelToken, progress: &mut 
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    archive::download(RUSTEDIT_URL, &dest, cancel, progress)?;
+    archive::download(&Link::Rustedit.url(), &dest, cancel, progress)?;
     Ok(dest)
+}
+
+/// The RustEdit extension again, when the server has it: after Carbon or Oxide was updated (or
+/// Oxide put back), so a server set up long ago doesn't keep an extension made for older Rust
+/// builds (RustEdit 2 maps need its newer versions). None: the server doesn't use it.
+pub fn refresh_rustedit(server_dir: &Path, cancel: &CancelToken, progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<Option<PathBuf>> {
+    if !has_rustedit(server_dir) {
+        return Ok(None);
+    }
+    install_rustedit(server_dir, cancel, progress).map(Some)
 }
 
 // ---------------------------------------------------------------- Carbon's profiler

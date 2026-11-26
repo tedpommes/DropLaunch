@@ -5,13 +5,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::hookscript;
 use crate::mods::{self, Framework};
 use crate::startfile::{self, Chosen, Layout, Target, Use};
 use crate::sync::Locked;
 use crate::steamcmd::appinfo::{self, Branch};
 use crate::steamcmd::parser::{self, Signal};
 use crate::steamcmd::runner::{self, Output};
-use crate::steamcmd::{install, manifest, CancelToken, RUST_SERVER_APP_ID};
+use crate::steamcmd::command::UpdateCommand;
+use crate::steamcmd::{install, manifest, CancelToken};
 use crate::t;
 
 #[derive(Debug, Clone, Serialize)]
@@ -23,6 +25,8 @@ pub enum JobEvent {
     Line { text: String, source: LineSource },
     /// One row of the setup checklist changed.
     Task { task: &'static str, state: TaskState, detail: String },
+    /// The setup downloaded what it needs and waits for Next in the setup window (`hold`).
+    Held,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -67,12 +71,16 @@ pub struct JobSummary {
 
 pub struct UpdateRequest {
     pub base_dir: PathBuf,
+    /// DropLaunch's data folder (which hook scripts you OK'd).
+    pub data_dir: PathBuf,
     pub steamcmd_dir: PathBuf,
     pub server_dir: PathBuf,
     pub branch: String,
     pub validate: bool,
     /// When the build changed: Carbon (or Oxide) to its newest version too.
     pub update_framework: bool,
+    /// What SteamCMD runs (Settings → Servers).
+    pub command: UpdateCommand,
 }
 
 impl UpdateRequest {
@@ -291,9 +299,71 @@ pub fn update_server(req: &UpdateRequest, cancel: &CancelToken, emit: &mut dyn F
             }
             None => {}
         }
-        write_update_script(&req.layout(), &req.branch, req.update_framework, &mut s);
+        write_update_script(&req.layout(), &req.branch, req.update_framework, &req.command, &mut s);
+        if let Some(problem) = run_after_update(&req.data_dir, &req.server_dir, &req.branch, &mut s) {
+            detail.push_str(&format!(" · {problem}"));
+        }
     }
     s.finish(outcome, started)
+}
+
+/// Your after_update.bat in the server folder, when there is one: its output in the log. What
+/// went wrong with it, for the summary (None: fine, or there's none). Only as you OK'd it
+/// (Settings › Advanced): a new or changed one isn't run.
+fn run_after_update(data_dir: &Path, server_dir: &Path, branch: &str, s: &mut Session) -> Option<String> {
+    let name = hookscript::AFTER_UPDATE;
+    let not_ok = |s: &mut Session| {
+        let problem = t!("hook.notOkUpdate", name);
+        s.line(problem.clone(), LineSource::Error);
+        Some(problem)
+    };
+    match hookscript::trust(data_dir, server_dir, name) {
+        hookscript::Trust::None => return None,
+        hookscript::Trust::Ok => {}
+        _ => return not_ok(s),
+    }
+    s.line(t!("hook.running", name), LineSource::App);
+    s.status(t!("hook.running", name));
+    let env = [("DROPLAUNCH_BRANCH", branch.to_string())];
+    let ran = match hookscript::run_checked(data_dir, server_dir, name, &env, hookscript::AFTER_UPDATE_TIMEOUT) {
+        hookscript::Checked::Ran(ran) => ran,
+        hookscript::Checked::Missing => return None,
+        // (Changed just now.)
+        hookscript::Checked::NotOk(_) => return not_ok(s),
+    };
+    match ran {
+        Ok(ran) => {
+            for line in &ran.lines {
+                s.line(line.clone(), LineSource::Steamcmd);
+            }
+            let problem = ran.problem(name);
+            s.line(problem.clone().unwrap_or_else(|| t!("hook.done", name)), if problem.is_some() { LineSource::Error } else { LineSource::App });
+            problem
+        }
+        Err(e) => {
+            let problem = t!("hook.cantRun", name, error = e);
+            s.line(problem.clone(), LineSource::Error);
+            Some(problem)
+        }
+    }
+}
+
+/// The RustEdit extension again after Carbon or Oxide was updated, when the server has it (a
+/// download that fails only gets a line: the one there stays).
+fn refresh_rustedit(server_dir: &Path, cancel: &CancelToken, s: &mut Session) {
+    if !mods::has_rustedit(server_dir) {
+        return;
+    }
+    s.status(t!("job.rustedit.status"));
+    let label = t!("job.rustedit.downloading");
+    let result = mods::refresh_rustedit(server_dir, cancel, &mut |done, total| {
+        s.progress(label.as_str(), percent(done, total), done, total.unwrap_or(0));
+    });
+    match result {
+        Ok(Some(_)) => s.line(t!("job.rustedit.refreshed"), LineSource::App),
+        Ok(None) => {}
+        Err(e) => s.line(t!("job.rustedit.refreshFailed", error = format!("{e:#}")), LineSource::Error),
+    }
 }
 
 /// Carbon or Oxide's newest release over the installed one (settings and plugins stay).
@@ -307,6 +377,7 @@ fn update_framework(framework: Framework, server_dir: &Path, cancel: &CancelToke
     })
     .map_err(|e| format!("{e:#}"))?;
     s.line(t!("job.framework.done", framework = name), LineSource::App);
+    refresh_rustedit(server_dir, cancel, s);
     Ok(())
 }
 
@@ -330,6 +401,7 @@ fn reapply_oxide_now(server_dir: &Path, cancel: &CancelToken, s: &mut Session) -
         return Err(t!("job.oxide.notPatched"));
     }
     s.line(t!("files.oxideDone"), LineSource::App);
+    refresh_rustedit(server_dir, cancel, s);
     Ok(())
 }
 
@@ -346,8 +418,8 @@ pub fn reapply_oxide(server_dir: &Path, cancel: &CancelToken, emit: &mut dyn FnM
     s.finish(outcome, started)
 }
 
-fn write_update_script(layout: &Layout, branch: &str, update_framework: bool, s: &mut Session) {
-    match startfile::write_update_script(layout, branch, update_framework) {
+fn write_update_script(layout: &Layout, branch: &str, update_framework: bool, command: &UpdateCommand, s: &mut Session) {
+    match startfile::write_update_script(layout, branch, update_framework, command) {
         Ok(path) => s.line(t!("job.wrote", file = path.display(), branch), LineSource::App),
         Err(e) => s.line(t!("job.writeFailed", file = startfile::UPDATE_SCRIPT, error = e), LineSource::Error),
     }
@@ -371,18 +443,7 @@ fn run_update(req: &UpdateRequest, cancel: &CancelToken, s: &mut Session) -> Out
     // while an update is waiting (SteamCMD skips the check and plans to patch the missing file
     // anyway). So a files-missing failure always gets one more run, with validate.
     let mut missing_retried = false;
-    let args = |validate: bool| {
-        let mut args: Vec<String> =
-            ["+@ShutdownOnFailedCommand", "1", "+@NoPromptForPassword", "1", "+force_install_dir"].map(String::from).to_vec();
-        args.push(req.server_dir.to_string_lossy().into_owned());
-        // Always name the branch: without -beta SteamCMD keeps whatever beta was used last.
-        args.extend(["+login", "anonymous", "+app_update", RUST_SERVER_APP_ID, "-beta", req.branch.as_str()].map(String::from));
-        if validate {
-            args.push("validate".into());
-        }
-        args.push("+quit".into());
-        args
-    };
+    let args = |validate: bool| req.command.args(&req.server_dir, &req.branch, validate);
 
     let (branch, dir) = (&req.branch, req.server_dir.display());
     s.line(
@@ -394,6 +455,9 @@ fn run_update(req: &UpdateRequest, cancel: &CancelToken, s: &mut Session) -> Out
         },
         LineSource::App,
     );
+    if !req.command.is_default() {
+        s.line(t!("job.ownCommand", command = req.command.text()), LineSource::App);
+    }
     let exe = install::executable(&req.steamcmd_dir);
     for attempt in 1..=MAX_ATTEMPTS {
         s.success = None;
@@ -478,6 +542,11 @@ pub struct SetupOptions {
     /// Only the owner (and the players added in Settings) can join.
     #[serde(default)]
     pub whitelist: bool,
+    /// The setup window is open with Continue when done unticked: once the downloads are done,
+    /// setup waits here until it's false (Next), so the options and the owner can still change
+    /// and nothing is installed or started before that.
+    #[serde(default)]
+    pub hold: bool,
 }
 
 /// Starts a server through DropLaunch's server manager; returns a short note.
@@ -488,6 +557,8 @@ pub type Extras = Box<dyn Fn(&SetupOptions) -> Vec<String> + Send>;
 
 pub struct SetupRequest {
     pub base_dir: PathBuf,
+    /// DropLaunch's data folder (which hook scripts you OK'd).
+    pub data_dir: PathBuf,
     pub steamcmd_dir: PathBuf,
     pub server_dir: PathBuf,
     pub maps_dir: PathBuf,
@@ -504,6 +575,8 @@ pub struct SetupRequest {
     pub launcher: Launcher,
     /// For update_server.bat: Carbon or Oxide with every server update.
     pub update_framework: bool,
+    /// What SteamCMD runs (Settings → Servers), for the download and update_server.bat.
+    pub command: UpdateCommand,
 }
 
 /// The one-click "fix": SteamCMD, server files, optional Carbon/Oxide (+ RustEdit), a procedural
@@ -533,7 +606,7 @@ fn run_setup(req: &SetupRequest, cancel: &CancelToken, s: &mut Session) -> Outco
     let chosen = req.procgen_settings.as_deref().and_then(|path| Chosen::read(path, Use::Procgen));
     if std::fs::create_dir_all(&req.server_dir).is_ok() {
         let _ = startfile::ensure(&layout, &Target::Procgen, false, chosen.as_ref());
-        write_update_script(&layout, &opts.branch, req.update_framework, s);
+        write_update_script(&layout, &opts.branch, req.update_framework, &req.command, s);
     }
 
     s.task("server", TaskState::Active, "");
@@ -543,11 +616,13 @@ fn run_setup(req: &SetupRequest, cancel: &CancelToken, s: &mut Session) -> Outco
         None => {
             let update = UpdateRequest {
                 base_dir: req.base_dir.clone(),
+                data_dir: req.data_dir.clone(),
                 steamcmd_dir: req.steamcmd_dir.clone(),
                 server_dir: req.server_dir.clone(),
                 branch: opts.branch.clone(),
                 validate: manifest::read_installed(&req.server_dir).is_some(), // repair a half install
                 update_framework: false, // setup installs it right after
+                command: req.command.clone(),
             };
             match run_update(&update, cancel, s) {
                 Outcome::Ok { .. } => t!("job.task.serverDownloaded", branch = opts.branch),
@@ -559,10 +634,13 @@ fn run_setup(req: &SetupRequest, cancel: &CancelToken, s: &mut Session) -> Outco
         }
     };
     s.task("server", TaskState::Done, server_note);
+    if wait_for_next(&req.options, cancel, s) {
+        return Outcome::Cancelled;
+    }
     let mut notes = Vec::new();
     let mut warnings = Vec::new();
 
-    // Chosen now: the options could change while SteamCMD downloaded.
+    // Chosen now: the options could change while SteamCMD downloaded (and until Next).
     let opts = &options();
     let framework_ready = mods::detect(&req.server_dir) == opts.framework
         && !mods::oxide_needs_reapply(&req.server_dir)
@@ -601,7 +679,7 @@ fn run_setup(req: &SetupRequest, cancel: &CancelToken, s: &mut Session) -> Outco
 
     s.task("startfile", TaskState::Active, "");
     let scripts = startfile::ensure(&layout, &Target::Procgen, false, chosen.as_ref())
-        .and_then(|(start, _)| Ok((start, startfile::write_update_script(&layout, &opts.branch, req.update_framework)?)));
+        .and_then(|(start, _)| Ok((start, startfile::write_update_script(&layout, &opts.branch, req.update_framework, &req.command)?)));
     match scripts {
         Ok((start, update)) => {
             if let Some(owner) = (req.owner)() {
@@ -656,6 +734,22 @@ fn run_setup(req: &SetupRequest, cancel: &CancelToken, s: &mut Session) -> Outco
     notes.extend(warnings);
     let buildid = manifest::read_installed(&req.server_dir).map(|i| i.buildid);
     Outcome::Ok { title, detail: notes.join(" · "), attention: false, buildid }
+}
+
+/// The downloads are done: with `hold` on (the setup window is open, Continue when done
+/// unticked), wait for Next before the framework, the owner and starting the server. True: it was
+/// cancelled meanwhile.
+fn wait_for_next(options: &Mutex<SetupOptions>, cancel: &CancelToken, s: &mut Session) -> bool {
+    if !options.locked().hold {
+        return false;
+    }
+    (s.emit)(JobEvent::Held);
+    while options.locked().hold {
+        if wait_or_cancel(Duration::from_millis(150), cancel) {
+            return true;
+        }
+    }
+    false
 }
 
 fn install_framework(opts: &SetupOptions, server_dir: &Path, cancel: &CancelToken, s: &mut Session) -> anyhow::Result<String> {
@@ -747,5 +841,55 @@ mod tests {
         assert!(wait_or_cancel(Duration::from_secs(10), &cancel));
         assert!(started.elapsed() < Duration::from_secs(2));
         assert!(!wait_or_cancel(Duration::from_millis(50), &CancelToken::default()));
+    }
+
+    fn options(hold: bool) -> Arc<Mutex<SetupOptions>> {
+        Arc::new(Mutex::new(SetupOptions {
+            branch: "public".into(),
+            framework: Framework::Carbon,
+            rustedit: true,
+            start_server: true,
+            start_map: None,
+            playtest: false,
+            profiler: false,
+            prefab: false,
+            whitelist: false,
+            hold,
+        }))
+    }
+
+    /// Runs wait_for_next; the events it sent come back as their "kind".
+    fn wait(options: &Mutex<SetupOptions>, cancel: &CancelToken) -> (bool, Vec<String>) {
+        let mut kinds = Vec::new();
+        let mut emit = |e: JobEvent| kinds.push(serde_json::to_value(&e).unwrap()["kind"].as_str().unwrap().to_string());
+        let mut s = Session::new(&mut emit, String::new());
+        let cancelled = wait_for_next(options, cancel, &mut s);
+        (cancelled, kinds)
+    }
+
+    #[test]
+    fn setup_waits_for_next_only_when_held() {
+        // Not held (Continue when done ticked, the window hidden): straight on, nothing said.
+        assert_eq!(wait(&options(false), &CancelToken::default()), (false, vec![]));
+
+        // Held: it says so and waits until Next lets go.
+        let held = options(true);
+        let next = held.clone();
+        let started = Instant::now();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            next.locked().hold = false;
+        });
+        assert_eq!(wait(&held, &CancelToken::default()), (false, vec!["held".to_string()]));
+        assert!(started.elapsed() >= Duration::from_millis(300));
+
+        // Cancelled while it waits.
+        let cancel = CancelToken::default();
+        let other = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            other.cancel();
+        });
+        assert_eq!(wait(&options(true), &cancel), (true, vec!["held".to_string()]));
     }
 }

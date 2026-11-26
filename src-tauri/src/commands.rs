@@ -7,9 +7,12 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::advanced::{self, Advanced, Link};
 use crate::client::{self, CacheInfo, Cleaned};
 use crate::concmd;
+use crate::configfiles;
 use crate::config::{BranchCache, Config, ConfigStore, Guide};
+use crate::addons;
 use crate::assets;
 use crate::kits;
 use crate::jobs::{self, JobEvent, JobSummary, Launcher, SetupOptions, SetupRequest, UpdateRequest};
@@ -18,10 +21,11 @@ use crate::mods::{self, Framework};
 use crate::owner::{self, LocalAccount, SteamUser};
 use crate::platform;
 use crate::playtest::{self, mapview, MapNotes, Playtest, PlaytestView};
-use crate::server::{ConsoleLine, ServerManager, ServerView, StartContext, StartReply};
+use crate::server::{hide_addresses, ConsoleLine, ServerManager, ServerView, StartContext, StartReply};
 use crate::startfile::{self, Chosen, Layout, Target, Use};
 use crate::sync::Locked;
 use crate::steamcmd::manifest::{self, InstalledServer};
+use crate::steamcmd::command::{self as steamcmd_command, UpdateCommand};
 use crate::steamcmd::{appinfo, install, CancelToken};
 use crate::toast::{self, Toast};
 use crate::updater::{self, Manifest, UpdateInfo};
@@ -42,6 +46,8 @@ pub struct AppState {
     pub server: ServerManager,
     /// The active maps folder, watched for new and saved maps.
     pub watcher: MapWatcher,
+    /// Settings › Advanced's watched folder (one more, for maps kept elsewhere).
+    pub extra_watcher: MapWatcher,
     /// Bug reports from Rust's chat (/bug) on a map of the server.
     pub playtest: Playtest,
     /// Files DropLaunch was opened with (dropped on the exe), until the UI asks for them.
@@ -84,6 +90,7 @@ impl AppState {
             setup_options: Mutex::new(None),
             server,
             watcher: MapWatcher::default(),
+            extra_watcher: MapWatcher::default(),
             playtest,
             pending_files: Mutex::new(files),
             update: Mutex::new(None),
@@ -92,6 +99,20 @@ impl AppState {
 
     pub fn maps_dir(&self) -> PathBuf {
         self.store.locked().maps_dir()
+    }
+
+    /// Watch the maps folder, and Settings › Advanced's folder when one is set (not before setup
+    /// linked the folders).
+    pub fn watch_folders(&self) {
+        let (maps, extra) = {
+            let store = self.store.locked();
+            (store.maps_dir(), store.watch_dir().filter(|_| store.config.linked))
+        };
+        self.watcher.watch(maps);
+        match extra {
+            Some(dir) => self.extra_watcher.watch(dir),
+            None => self.extra_watcher.unwatch(),
+        }
     }
 
     /// Claim the single SteamCMD slot (two SteamCMDs in one folder corrupt each other). `dir`:
@@ -147,7 +168,7 @@ impl AppState {
     /// folder. At start, after setup and updates, and when a folder or the setting changes; a
     /// file is only written when its text changed. Not before setup linked the folders.
     pub fn write_update_scripts(&self) {
-        let (base, steamcmd_dir, servers, update_framework) = {
+        let (base, steamcmd_dir, servers, update_framework, command) = {
             let store = self.store.locked();
             let steamcmd_dir = store.steamcmd_dir();
             if !store.config.linked || !install::is_installed(&steamcmd_dir) {
@@ -158,17 +179,17 @@ impl AppState {
             if servers.is_empty() {
                 servers.push((store.server_dir(), store.config.branch.clone()));
             }
-            (store.base.clone(), steamcmd_dir, servers, store.config.update_framework)
+            (store.base.clone(), steamcmd_dir, servers, store.config.update_framework, store.config.update_command())
         };
         for (server_dir, branch) in &servers {
             if server_dir.is_dir() {
                 let layout = Layout { base: &base, server_dir, steamcmd_dir: &steamcmd_dir };
-                if let Err(e) = startfile::write_update_script(&layout, branch, update_framework) {
+                if let Err(e) = startfile::write_update_script(&layout, branch, update_framework, &command) {
                     crate::log::write(&format!("{}: {e}", server_dir.join(startfile::UPDATE_SCRIPT).display()));
                 }
             }
         }
-        if let Err(e) = startfile::write_steamcmd_update_script(&base, &steamcmd_dir, &servers, update_framework) {
+        if let Err(e) = startfile::write_steamcmd_update_script(&base, &steamcmd_dir, &servers, update_framework, &command) {
             crate::log::write(&format!("{}: {e}", steamcmd_dir.join(startfile::STEAMCMD_UPDATE_SCRIPT).display()));
         }
     }
@@ -306,6 +327,9 @@ pub struct Snapshot {
     update_check: bool,
     /// Server updates bring Carbon or Oxide up to date too.
     update_framework: bool,
+    /// The SteamCMD update command (Settings → Servers), and DropLaunch's own.
+    steamcmd_update: String,
+    steamcmd_update_default: &'static str,
     /// The new version the user doesn't want to be asked about again.
     skipped_update: Option<String>,
     /// Made the owner (admin) of every DropLaunch server.
@@ -322,6 +346,52 @@ pub struct Snapshot {
     welcomed: bool,
     /// Tips and the Getting started checklist.
     guide: Guide,
+    /// Settings › Advanced as it's set, and what DropLaunch uses when nothing is.
+    advanced: Advanced,
+    advanced_defaults: AdvancedDefaults,
+    /// Settings › Advanced's watched folder, in full (None: none).
+    watch_dir: Option<String>,
+    /// The DropLaunch plugin in the active server folder was changed by you (it's kept).
+    plugin_edited: bool,
+    /// Your scripts in the active server folder (before_start.bat, after_update.bat).
+    hooks: HookInfo,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdvancedDefaults {
+    steamcmd_url: &'static str,
+    carbon_url: &'static str,
+    oxide_url: &'static str,
+    rustedit_url: &'static str,
+    ready_text: &'static str,
+    rcon_text: &'static str,
+}
+
+impl AdvancedDefaults {
+    fn get() -> Self {
+        Self {
+            steamcmd_url: Link::Steamcmd.default_url(),
+            carbon_url: Link::Carbon.default_url(),
+            oxide_url: Link::Oxide.default_url(),
+            rustedit_url: Link::Rustedit.default_url(),
+            ready_text: "Server startup complete",
+            rcon_text: "WebSocket RCON Started",
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HookInfo {
+    before_start: &'static str,
+    after_update: &'static str,
+    /// They're in the active server folder.
+    has_before_start: bool,
+    has_after_update: bool,
+    /// Whether you OK'd them as they are, and how their last run went.
+    before_start_status: Option<crate::hookscript::Status>,
+    after_update_status: Option<crate::hookscript::Status>,
 }
 
 /// What the UI shows. Read from a copy of the settings: the disk is looked at without holding their
@@ -424,6 +494,8 @@ fn read_snapshot(store: &ConfigStore, busy: bool, live_dir: Option<PathBuf>) -> 
         clean_client_maps: store.config.clean_client_maps,
         update_check: store.config.update_check,
         update_framework: store.config.update_framework,
+        steamcmd_update: store.config.update_command().text(),
+        steamcmd_update_default: steamcmd_command::DEFAULT,
         skipped_update: store.config.skipped_update.clone(),
         owner: store.config.owner.clone(),
         whitelist: store.config.whitelist,
@@ -432,6 +504,18 @@ fn read_snapshot(store: &ConfigStore, busy: bool, live_dir: Option<PathBuf>) -> 
         map_backups_dir: store.data.join(client::BACKUP_DIR).display().to_string(),
         welcomed: store.config.welcomed,
         guide: store.config.guide.clone(),
+        advanced: store.config.advanced.clone(),
+        advanced_defaults: AdvancedDefaults::get(),
+        watch_dir: store.config.advanced.watch_dir.as_deref().map(|d| store.resolve(d).display().to_string()),
+        plugin_edited: linked && playtest::plugin_edited(&server_dir),
+        hooks: HookInfo {
+            before_start: crate::hookscript::BEFORE_START,
+            after_update: crate::hookscript::AFTER_UPDATE,
+            has_before_start: linked && crate::hookscript::present(&server_dir, crate::hookscript::BEFORE_START),
+            has_after_update: linked && crate::hookscript::present(&server_dir, crate::hookscript::AFTER_UPDATE),
+            before_start_status: linked.then(|| crate::hookscript::status(&store.data, &server_dir, crate::hookscript::BEFORE_START)),
+            after_update_status: linked.then(|| crate::hookscript::status(&store.data, &server_dir, crate::hookscript::AFTER_UPDATE)),
+        },
         busy,
         server_running,
     }
@@ -462,7 +546,7 @@ pub async fn set_folder(state: State<'_, AppState>, key: String, path: String, b
         save(&store)?;
     }
     if key == "maps" {
-        state.watcher.watch(state.maps_dir());
+        state.watch_folders();
     } else {
         state.write_update_scripts();
     }
@@ -476,6 +560,13 @@ pub async fn pick_folder(app: AppHandle, title: String, start: Option<String>) -
         dialog = dialog.set_directory(dir);
     }
     Ok(dialog.blocking_pick_folder().and_then(|p| p.into_path().ok()).map(|p| p.display().to_string()))
+}
+
+/// A .dladdon file to add (Settings → Add-ons).
+#[tauri::command]
+pub async fn pick_addon(app: AppHandle, title: String) -> CmdResult<Option<String>> {
+    let dialog = app.dialog().file().set_title(title).add_filter("DropLaunch add-on", &[addons::EXTENSION]);
+    Ok(dialog.blocking_pick_file().and_then(|p| p.into_path().ok()).map(|p| p.display().to_string()))
 }
 
 #[tauri::command]
@@ -541,6 +632,8 @@ pub struct OptionsPatch {
     clean_client_maps: Option<bool>,
     update_check: Option<bool>,
     update_framework: Option<bool>,
+    /// The SteamCMD update command; "" puts DropLaunch's own back.
+    steamcmd_update: Option<String>,
     /// "" clears it.
     skipped_update: Option<String>,
     welcomed: Option<bool>,
@@ -553,6 +646,65 @@ pub struct OptionsPatch {
     whitelist_ids: Option<Vec<String>>,
     backup_client_maps: Option<bool>,
     guide: Option<GuidePatch>,
+    advanced: Option<AdvancedPatch>,
+}
+
+/// Settings › Advanced: each one that's given is set; "" puts DropLaunch's own back (or none).
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct AdvancedPatch {
+    steamcmd_url: Option<String>,
+    carbon_url: Option<String>,
+    oxide_url: Option<String>,
+    rustedit_url: Option<String>,
+    ready_text: Option<String>,
+    rcon_text: Option<String>,
+    start_args: Option<String>,
+    /// A folder (picked in the window).
+    watch_dir: Option<String>,
+}
+
+/// What changed with Settings › Advanced.
+#[derive(Default)]
+struct AdvancedChange {
+    links: bool,
+    watch: bool,
+}
+
+/// Settings › Advanced with `patch`, each value checked first (one that can't be used changes
+/// nothing).
+fn patched_advanced(store: &ConfigStore, patch: &AdvancedPatch) -> CmdResult<(Advanced, AdvancedChange)> {
+    let mut next = store.config.advanced.clone();
+    let mut change = AdvancedChange::default();
+    let links = [(Link::Steamcmd, &patch.steamcmd_url), (Link::Carbon, &patch.carbon_url), (Link::Oxide, &patch.oxide_url), (Link::Rustedit, &patch.rustedit_url)];
+    for (link, value) in links {
+        if let Some(value) = value {
+            // DropLaunch's own link given: none of yours.
+            let url = advanced::check_url(value)?.filter(|u| u != link.default_url());
+            change.links |= *link.slot(&mut next) != url;
+            *link.slot(&mut next) = url;
+        }
+    }
+    let defaults = AdvancedDefaults::get();
+    if let Some(value) = &patch.ready_text {
+        next.ready_text = advanced::check_text(value)?.filter(|t| t != defaults.ready_text);
+    }
+    if let Some(value) = &patch.rcon_text {
+        next.rcon_text = advanced::check_text(value)?.filter(|t| t != defaults.rcon_text);
+    }
+    if let Some(value) = &patch.start_args {
+        next.start_args = startfile::check_start_args(value)?;
+    }
+    if let Some(value) = &patch.watch_dir {
+        let dir = match value.trim() {
+            "" => None,
+            path if Path::new(path).is_absolute() => Some(store.to_stored(Path::new(path))),
+            _ => return Err(t!("advanced.error.folder")),
+        };
+        change.watch = next.watch_dir != dir;
+        next.watch_dir = dir;
+    }
+    Ok((next, change))
 }
 
 /// The guide switched on or off, tips read, checklist steps done, or all of it again.
@@ -569,9 +721,25 @@ pub struct GuidePatch {
 #[tauri::command]
 pub async fn set_options(state: State<'_, AppState>, options: OptionsPatch) -> CmdResult<Snapshot> {
     let whitelist_changed = options.whitelist.is_some() || options.whitelist_ids.is_some();
-    let scripts_changed = options.update_framework.is_some();
+    let scripts_changed = options.update_framework.is_some() || options.steamcmd_update.is_some();
+    // Checked first, so a command that can't be used changes nothing.
+    let steamcmd_update = match options.steamcmd_update.as_deref().map(str::trim) {
+        None => None,
+        Some("") => Some(None),
+        Some(text) => {
+            let command = UpdateCommand::parse(text)?;
+            Some((!command.is_default()).then(|| command.text()))
+        }
+    };
+    let mut advanced_change = AdvancedChange::default();
     let server_dir = {
         let mut store = state.store.locked();
+        if let Some(patch) = &options.advanced {
+            let (next, change) = patched_advanced(&store, patch)?;
+            store.config.advanced = next;
+            advanced::set(&store.config.advanced);
+            advanced_change = change;
+        }
         if let Some(v) = options.auto_join {
             store.config.auto_join = v;
         }
@@ -589,6 +757,9 @@ pub async fn set_options(state: State<'_, AppState>, options: OptionsPatch) -> C
         }
         if let Some(v) = options.update_framework {
             store.config.update_framework = v;
+        }
+        if let Some(command) = steamcmd_update {
+            store.config.steamcmd_update = command;
         }
         if let Some(v) = options.skipped_update {
             store.config.skipped_update = Some(v).filter(|v| !v.is_empty());
@@ -638,9 +809,31 @@ pub async fn set_options(state: State<'_, AppState>, options: OptionsPatch) -> C
     if whitelist_changed {
         sync_whitelist(&state);
     }
-    if scripts_changed {
+    if scripts_changed || advanced_change.links {
         state.write_update_scripts();
     }
+    if advanced_change.watch {
+        state.watch_folders();
+    }
+    snapshot(&state).await
+}
+
+/// Settings › Advanced: DropLaunch's own plugin back in place of one you changed, in every server
+/// folder.
+#[tauri::command]
+pub async fn restore_plugin(state: State<'_, AppState>) -> CmdResult<Snapshot> {
+    let dirs: Vec<PathBuf> = {
+        let store = state.store.locked();
+        let mut dirs: Vec<PathBuf> = store.installs().into_iter().map(|(dir, _)| dir).collect();
+        if dirs.is_empty() {
+            dirs.push(store.server_dir());
+        }
+        dirs
+    };
+    tauri::async_runtime::spawn_blocking(move || playtest::restore_plugin(&dirs))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| t!("advanced.plugin.restoreFailed", error = e))?;
     snapshot(&state).await
 }
 
@@ -688,8 +881,10 @@ pub async fn reset_settings(window: tauri::WebviewWindow, state: State<'_, AppSt
         // runs again (it finds what's there). Only the branch list Steam gave is kept.
         store.config = Config { branch_cache: old.branch_cache, last_used: old.last_used, folder: old.folder, linked: false, legacy_drops: false, ..Config::default() };
         save(&store)?;
+        advanced::set(&store.config.advanced);
         (store.base.clone(), store.data.clone())
     };
+    state.watch_folders();
     // (The language and theme files read, and the window dressed, without holding the settings.)
     let languages = lang::list(&base, &data);
     let _ = lang::activate(lang::choose(None, &languages));
@@ -757,11 +952,13 @@ pub async fn server_update(state: State<'_, AppState>, validate: bool, on_event:
         save(&store)?;
         UpdateRequest {
             base_dir: store.base.clone(),
+            data_dir: store.data.clone(),
             steamcmd_dir: store.steamcmd_dir(),
             server_dir: store.server_dir(),
             branch: store.config.branch.clone(),
             validate,
             update_framework: store.config.update_framework,
+            command: store.config.update_command(),
         }
     };
     let summary = tauri::async_runtime::spawn_blocking(move || {
@@ -817,7 +1014,7 @@ pub async fn setup_all(state: State<'_, AppState>, options: SetupOptions, on_eve
         match server.start(target, prefab, ctx, false)? {
             StartReply::Started { .. } => Ok(t!("job.launch.running")),
             StartReply::Busy { title } => Err(t!("job.launch.busy", title)),
-            StartReply::Queued { .. } | StartReply::OxideInactive => Ok(t!("job.launch.starting")),
+            StartReply::Queued { .. } | StartReply::OxideInactive | StartReply::Script { .. } => Ok(t!("job.launch.starting")),
         }
     });
     let live_options = Arc::new(Mutex::new(options.clone()));
@@ -861,6 +1058,7 @@ pub async fn setup_all(state: State<'_, AppState>, options: SetupOptions, on_eve
         save(&store)?;
         SetupRequest {
             base_dir: store.base.clone(),
+            data_dir: store.data.clone(),
             steamcmd_dir: store.steamcmd_dir(),
             server_dir: server_dir.clone(),
             maps_dir: store.maps_dir(),
@@ -870,6 +1068,7 @@ pub async fn setup_all(state: State<'_, AppState>, options: SetupOptions, on_eve
             extras,
             launcher,
             update_framework: store.config.update_framework,
+            command: store.config.update_command(),
         }
     };
     *state.setup_options.locked() = Some(live_options);
@@ -954,8 +1153,9 @@ pub async fn server_space(state: State<'_, AppState>, branch: Option<String>) ->
     tauri::async_runtime::spawn_blocking(move || space_short(&server_dir)).await.map_err(|e| e.to_string())
 }
 
-/// Change the options while setup downloads (the mod framework and what comes with it, the
-/// whitelist, starting the server and how). The branch and the map to start stay as they began.
+/// Change the options while setup downloads or waits for Next (the mod framework and what comes
+/// with it, the whitelist, starting the server and how, and whether it waits). The branch and the
+/// map to start stay as they began.
 #[tauri::command]
 pub async fn update_setup_options(state: State<'_, AppState>, options: SetupOptions) -> CmdResult<()> {
     if let Some(live) = state.setup_options.locked().as_ref() {
@@ -967,6 +1167,7 @@ pub async fn update_setup_options(state: State<'_, AppState>, options: SetupOpti
         live.profiler = options.profiler;
         live.prefab = options.prefab;
         live.whitelist = options.whitelist;
+        live.hold = options.hold;
     }
     Ok(())
 }
@@ -987,6 +1188,9 @@ pub struct MapList {
     maps_dir: String,
     maps_dir_exists: bool,
     maps: Vec<MapEntry>,
+    /// Settings › Advanced's watched folder and its maps (None: none set).
+    watched_dir: Option<String>,
+    watched: Vec<MapEntry>,
     /// Maps that were started, newest first.
     history: Vec<MapEntry>,
     /// Procedural map start files dropped on DropLaunch, newest first.
@@ -1039,14 +1243,15 @@ fn presets(data: &Path, server_dir: &Path) -> Vec<PresetEntry> {
 
 #[tauri::command]
 pub async fn list_maps(state: State<'_, AppState>) -> CmdResult<MapList> {
-    let (maps_dir, server_dir, steamcmd_dir, history, linked, data) = {
+    let (maps_dir, server_dir, steamcmd_dir, history, linked, data, watched_dir) = {
         let store = state.store.locked();
-        (store.maps_dir(), store.server_dir(), store.steamcmd_dir(), store.config.history.clone(), store.config.linked, store.data.clone())
+        (store.maps_dir(), store.server_dir(), store.steamcmd_dir(), store.config.history.clone(), store.config.linked, store.data.clone(), store.watch_dir())
     };
     // Not linked (after Reset everything): no maps folder until setup has run.
     if !linked {
         let presets = presets(&data, &server_dir);
-        return Ok(MapList { maps_dir_exists: false, maps_dir: maps_dir.display().to_string(), maps: Vec::new(), history: Vec::new(), presets });
+        let maps_dir = maps_dir.display().to_string();
+        return Ok(MapList { maps_dir_exists: false, maps_dir, maps: Vec::new(), watched_dir: None, watched: Vec::new(), history: Vec::new(), presets });
     }
     tauri::async_runtime::spawn_blocking(move || {
         // The setup makes it; once set up, a removed maps folder comes back. Before that (a first
@@ -1065,7 +1270,9 @@ pub async fn list_maps(state: State<'_, AppState>) -> CmdResult<MapList> {
             })
             .collect();
         let presets = presets(&data, &server_dir);
-        MapList { maps_dir_exists: maps_dir.is_dir(), maps_dir: maps_dir.display().to_string(), maps, history, presets }
+        let watched = watched_dir.as_deref().map(|dir| maps::scan(dir, &start_files)).unwrap_or_default();
+        let watched_dir = watched_dir.map(|d| d.display().to_string());
+        MapList { maps_dir_exists: maps_dir.is_dir(), maps_dir: maps_dir.display().to_string(), maps, watched_dir, watched, history, presets }
     })
     .await
     .map_err(|e| e.to_string())
@@ -1171,6 +1378,12 @@ pub async fn start_server(
     if !ignore_oxide && mods::oxide_needs_reapply(&ctx.server_dir) {
         return Ok(StartReply::OxideInactive);
     }
+    // Your before_start.bat runs only as you OK'd it: a new or changed one is asked about first
+    // (hook_approve), else the start would be refused.
+    let script = crate::hookscript::BEFORE_START;
+    if let trust @ (crate::hookscript::Trust::New | crate::hookscript::Trust::Changed) = crate::hookscript::trust(&ctx.data, &ctx.server_dir, script) {
+        return Ok(StartReply::Script { name: script.into(), path: ctx.server_dir.join(script).display().to_string(), changed: trust == crate::hookscript::Trust::Changed });
+    }
     // Only maps that exist go in the history (a typo'd path doesn't), and only when they start
     // (not when another server runs and the UI asks first).
     if let Target::Map(map) = target.clone() {
@@ -1186,6 +1399,56 @@ pub async fn start_server(
 #[tauri::command]
 pub async fn stop_server(state: State<'_, AppState>, force: bool) -> CmdResult<()> {
     state.server.stop(force)
+}
+
+/// Which script of the active server folder (only these two).
+fn hook_name(name: &str) -> CmdResult<&'static str> {
+    [crate::hookscript::BEFORE_START, crate::hookscript::AFTER_UPDATE].into_iter().find(|n| *n == name).ok_or_else(|| t!("hook.gone", name))
+}
+
+/// You OK'd your script in the active server folder as it is now (asked at a start, or Settings ›
+/// Advanced): it runs from now on, until it changes.
+#[tauri::command]
+pub async fn hook_approve(state: State<'_, AppState>, name: String) -> CmdResult<()> {
+    let name = hook_name(&name)?;
+    let (data, dir) = {
+        let store = state.store.locked();
+        (store.data.clone(), store.server_dir())
+    };
+    crate::hookscript::approve(&data, &dir, name)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookRan {
+    lines: Vec<String>,
+    code: Option<i32>,
+    timed_out: bool,
+}
+
+/// Settings › Advanced › Run now: your script, to try it (only as you OK'd it), with its output.
+#[tauri::command]
+pub async fn hook_run(state: State<'_, AppState>, name: String) -> CmdResult<HookRan> {
+    use crate::hookscript::{self, Checked};
+    let name = hook_name(&name)?;
+    let (data, dir, branch) = {
+        let store = state.store.locked();
+        (store.data.clone(), store.server_dir(), store.config.branch.clone())
+    };
+    state.ensure_free(&dir)?;
+    let (env, timeout) = if name == hookscript::BEFORE_START {
+        (vec![("DROPLAUNCH_MAP", String::new()), ("DROPLAUNCH_MAP_NAME", String::new()), ("DROPLAUNCH_TITLE", String::new())], hookscript::BEFORE_START_TIMEOUT)
+    } else {
+        (vec![("DROPLAUNCH_BRANCH", branch)], hookscript::AFTER_UPDATE_TIMEOUT)
+    };
+    let checked = tauri::async_runtime::spawn_blocking(move || hookscript::run_checked(&data, &dir, name, &env, timeout)).await.map_err(|e| e.to_string())?;
+    match checked {
+        Checked::Ran(Ok(ran)) => Ok(HookRan { lines: ran.lines, code: ran.code, timed_out: ran.timed_out }),
+        Checked::Ran(Err(e)) => Err(t!("hook.cantRun", name, error = e)),
+        Checked::Missing => Err(t!("hook.gone", name)),
+        Checked::NotOk(hookscript::Trust::Changed) => Err(t!("hook.runChanged", name)),
+        Checked::NotOk(_) => Err(t!("hook.runNew", name)),
+    }
 }
 
 /// Stop and start the running server again (from its own folder).
@@ -1700,6 +1963,18 @@ pub async fn playtest_delete(state: State<'_, AppState>, id: String) -> CmdResul
     state.playtest.delete(&id)
 }
 
+/// A report's "Ignore this player": their reports are left out from now on.
+#[tauri::command]
+pub async fn playtest_ignore(state: State<'_, AppState>, steam_id: String) -> CmdResult<PlaytestView> {
+    state.playtest.ignore(&steam_id)
+}
+
+/// Settings → Bug reports: ignored testers' reports are taken again. How many testers.
+#[tauri::command]
+pub async fn bug_reports_unignore(state: State<'_, AppState>) -> CmdResult<usize> {
+    state.playtest.unignore_all()
+}
+
 /// Teleport the host in the game: to a report's spot, or to a tester.
 #[tauri::command]
 pub async fn playtest_teleport(state: State<'_, AppState>, report: Option<String>, player: Option<String>) -> CmdResult<()> {
@@ -1826,9 +2101,13 @@ pub async fn item_icon(state: State<'_, AppState>, item: String) -> CmdResult<ta
         .map_err(|e| format!("{e:#}"))
 }
 
-/// Who's on the running server (Rust's own `playerlist`).
+/// Who's on the running server (Rust's own `playerlist`: the list DropLaunch keeps, else asked
+/// now).
 #[tauri::command]
 pub async fn kit_players(state: State<'_, AppState>) -> CmdResult<Vec<kits::Player>> {
+    if let Some(list) = state.server.players() {
+        return Ok(kits::parse_playerlist(&serde_json::Value::Array(list).to_string()).unwrap_or_default());
+    }
     let server = state.server.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let reply = server.rcon_call("playerlist", std::time::Duration::from_secs(4))?;
@@ -2260,4 +2539,377 @@ pub async fn start_file_forget(state: State<'_, AppState>, name: String) -> CmdR
         }
     }
     save(&store)
+}
+
+// ---------------------------------------------------------------- add-ons
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddonsState {
+    addons: Vec<addons::Addon>,
+    /// .dladdon files next to DropLaunch.exe or in Add-ons, not added yet (or newer): to add.
+    found: Vec<addons::Found>,
+    /// .dladdon files there that can't be added, and why.
+    unreadable: Vec<addons::Unreadable>,
+    /// The Add-ons folder (made when it isn't there yet, for Open folder).
+    folder: String,
+    api: u32,
+    /// DropLaunch's own version (add-ons are told).
+    version: &'static str,
+    /// The calls add-ons can make here (`droplaunch.has`).
+    calls: &'static [&'static str],
+}
+
+/// Every add-on (on or off; a broken one with its problem).
+#[tauri::command]
+pub async fn addons_list(state: State<'_, AppState>) -> CmdResult<AddonsState> {
+    let data = state.data_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        let folder = data.join(addons::FOLDER);
+        let _ = std::fs::create_dir_all(&folder);
+        let (found, unreadable) = addons::found(&data, &crate::config::base_dir());
+        AddonsState { addons: addons::list(&data), found, unreadable, folder: folder.display().to_string(), api: addons::API_VERSION, version: env!("CARGO_PKG_VERSION"), calls: &ADDON_CALLS }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// A found .dladdon isn't listed any more (until the file changes).
+#[tauri::command]
+pub async fn addon_hide(state: State<'_, AppState>, path: String) -> CmdResult<()> {
+    let data = state.data_dir();
+    tauri::async_runtime::spawn_blocking(move || addons::hide(&data, Path::new(&path))).await.map_err(|e| e.to_string())?
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddonsChecked {
+    /// Add-ons among the paths, to show before they're added.
+    addons: Vec<addons::Inspected>,
+    /// Add-ons that can't be added, and why.
+    problems: Vec<String>,
+    /// Everything else (maps, kits…).
+    rest: Vec<String>,
+}
+
+/// Which dropped paths are add-ons (a .dladdon, or a folder with addon.json): what they are.
+#[tauri::command]
+pub async fn addons_check(state: State<'_, AppState>, paths: Vec<String>) -> CmdResult<AddonsChecked> {
+    let data = state.data_dir();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut out = AddonsChecked { addons: Vec::new(), problems: Vec::new(), rest: Vec::new() };
+        for path in paths {
+            if !addons::is_addon(Path::new(&path)) {
+                out.rest.push(path);
+                continue;
+            }
+            match addons::inspect(&data, Path::new(&path)) {
+                Ok(found) => out.addons.push(found),
+                Err(e) => out.problems.push(e),
+            }
+        }
+        out
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Add an add-on (after its dialog): unpacked, or a folder used where it is; turned on.
+#[tauri::command]
+pub async fn addon_install(state: State<'_, AppState>, path: String) -> CmdResult<addons::Addon> {
+    let data = state.data_dir();
+    tauri::async_runtime::spawn_blocking(move || addons::install(&data, Path::new(&path))).await.map_err(|e| e.to_string())?
+}
+
+/// Take an add-on out, with what it saved.
+#[tauri::command]
+pub async fn addon_remove(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    addons::remove(&state.data_dir(), &id)
+}
+
+#[tauri::command]
+pub async fn addon_set_on(state: State<'_, AppState>, id: String, on: bool) -> CmdResult<()> {
+    addons::set_on(&state.data_dir(), &id, on)
+}
+
+/// Every call an add-on can make here (ui/addons.js adds the window's own, `ui.*`): what
+/// `droplaunch.has` answers from. Each one has its permission in `addon_permission`.
+pub const ADDON_CALLS: [&str; 23] = [
+    "app.info",
+    "storage.get",
+    "storage.set",
+    "storage.setMany",
+    "storage.remove",
+    "storage.keys",
+    "server.status",
+    "server.stop",
+    "server.restart",
+    "players.list",
+    "console.lines",
+    "rcon.send",
+    "rcon.ask",
+    "kits.list",
+    "kits.give",
+    "maps.list",
+    "reports.list",
+    "reports.setFixed",
+    "reports.teleport",
+    "reports.delete",
+    "configs.list",
+    "configs.read",
+    "configs.write",
+];
+
+/// Why an add-on's call failed: a code it can act on without reading the text, and the text (in
+/// DropLaunch's language) to show. denied | noServer | noPlugin | timeout | invalid | notFound |
+/// noCall | failed (the window adds busy and notInUse).
+#[derive(Debug, Serialize, PartialEq)]
+pub struct AddonError {
+    code: &'static str,
+    message: String,
+}
+
+impl AddonError {
+    fn new(code: &'static str, message: String) -> Self {
+        Self { code, message }
+    }
+}
+
+/// An error from the rest of DropLaunch, with the code its text stands for.
+impl From<String> for AddonError {
+    fn from(message: String) -> Self {
+        let is = |keys: &[&str]| keys.iter().any(|key| crate::lang::text(key, &[]) == message);
+        let code = if is(&["error.noServer", "error.consoleNotConnected", "error.consoleNotYet"]) {
+            "noServer"
+        } else if is(&["error.noAnswer"]) {
+            "timeout"
+        } else if is(&["bug.error.noPlugin"]) {
+            "noPlugin"
+        } else if is(&["bug.error.gone", "bug.error.left"]) {
+            "notFound"
+        } else {
+            "failed"
+        };
+        Self { code, message }
+    }
+}
+
+impl From<configfiles::Refused> for AddonError {
+    fn from(refused: configfiles::Refused) -> Self {
+        Self::new(refused.code, refused.message)
+    }
+}
+
+/// The server folders the configs calls see, by branch: every installed one, the one a server
+/// runs from first, then the active one. The first is the one used when an add-on names none.
+fn config_folders(state: &AppState) -> Vec<(String, PathBuf)> {
+    let live = state.server.live_dir();
+    let store = state.store.locked();
+    let mut folders: Vec<(String, PathBuf)> = store.installs().into_iter().map(|(dir, installed)| (installed.branch, dir)).collect();
+    if folders.is_empty() && store.server_dir().is_dir() {
+        folders.push((store.config.branch.clone(), store.server_dir()));
+    }
+    if let Some(dir) = live.as_ref().filter(|d| !folders.iter().any(|(_, f)| startfile::same_path(f, d))) {
+        folders.push(("running".to_string(), dir.clone()));
+    }
+    let active = store.config.branch.clone();
+    folders.sort_by_key(|(branch, dir)| (!live.as_ref().is_some_and(|l| startfile::same_path(l, dir)), *branch != active));
+    folders
+}
+
+/// What a call needs from addon.json's permissions (None: every add-on may; Err: no such call).
+fn addon_permission(call: &str) -> Result<Option<&'static str>, AddonError> {
+    Ok(match call {
+        "app.info" | "storage.get" | "storage.set" | "storage.setMany" | "storage.remove" | "storage.keys" => None,
+        "server.status" | "players.list" => Some("server:read"),
+        "console.lines" => Some("console:read"),
+        "rcon.send" | "rcon.ask" => Some("rcon"),
+        "server.stop" | "server.restart" => Some("server:control"),
+        "kits.list" | "kits.give" => Some("kits"),
+        "maps.list" => Some("maps:read"),
+        "reports.list" => Some("reports:read"),
+        "reports.setFixed" | "reports.teleport" | "reports.delete" => Some("reports:write"),
+        "configs.list" | "configs.read" => Some("configs:read"),
+        "configs.write" => Some("configs:write"),
+        _ => return Err(AddonError::new("noCall", t!("addons.error.call", call))),
+    })
+}
+
+/// A call from an add-on's page (ui/addons.js passes it on from its frame, with the add-on it
+/// came from), checked against what its addon.json asked for. The window does the ones that are
+/// about the window (toasts, links, the clipboard); everything else comes here. A failed call
+/// says why with a code (`AddonError`).
+#[tauri::command]
+pub async fn addon_call(state: State<'_, AppState>, id: String, call: String, args: Option<serde_json::Value>) -> Result<serde_json::Value, AddonError> {
+    use serde_json::Value;
+    let data = state.data_dir();
+    // Turned off or broken: as if it weren't there (its frame is gone already).
+    let addon = addons::find(&data, &id).filter(|a| a.on && a.problem.is_none()).ok_or_else(|| AddonError::new("denied", t!("addons.error.unknown", id)))?;
+    if let Some(needed) = addon_permission(&call)? {
+        if !addon.manifest.permissions.iter().any(|p| p == needed) {
+            return Err(AddonError::new("denied", t!("addons.error.denied", name = addon.manifest.name, permission = needed)));
+        }
+    }
+    let args = args.unwrap_or(Value::Null);
+    let text = |name: &str| args.get(name).and_then(Value::as_str).unwrap_or("").to_string();
+    let invalid = |e: String| AddonError::new("invalid", e);
+    let report_id = || {
+        let id = text("id");
+        if id.is_empty() || id.len() > 80 {
+            return Err(AddonError::new("notFound", t!("bug.error.gone")));
+        }
+        Ok(id)
+    };
+    let value = match call.as_str() {
+        "app.info" => serde_json::json!({ "version": env!("CARGO_PKG_VERSION"), "api": addons::API_VERSION, "language": lang::current().code }),
+        "storage.get" => addons::storage_get(&data, &id, &text("key")),
+        "storage.keys" => addons::storage_keys(&data, &id).into(),
+        "storage.set" => addons::storage_set(&data, &id, &text("key"), args.get("value").cloned().unwrap_or(Value::Null)).map_err(invalid).map(|()| Value::Null)?,
+        "storage.remove" => addons::storage_set(&data, &id, &text("key"), Value::Null).map_err(invalid).map(|()| Value::Null)?,
+        // Several at once (the SDK gathers a page's sets for a moment): one write.
+        "storage.setMany" => {
+            let entries = args.get("entries").and_then(Value::as_object).cloned().unwrap_or_default();
+            addons::storage_set_many(&data, &id, entries).map_err(invalid)?;
+            Value::Null
+        }
+        "server.status" => to_json(&state.server.view())?,
+        "console.lines" => to_json(&state.server.lines())?,
+        "players.list" => {
+            // The list DropLaunch keeps (asked every few seconds), else asked now.
+            let mut players = match state.server.players() {
+                Some(list) => Value::Array(list),
+                None => {
+                    let server = state.server.clone();
+                    let reply = tauri::async_runtime::spawn_blocking(move || server.rcon_call("playerlist", std::time::Duration::from_secs(4))).await.map_err(|e| e.to_string())??;
+                    serde_json::from_str::<Value>(reply.trim()).map_err(|_| t!("error.kits.noPlayerList", error = reply.trim().chars().take(120).collect::<String>()))?
+                }
+            };
+            // "See your server" isn't "see where your testers live": their IP addresses only go
+            // to an add-on that could ask the console for them anyway.
+            if !addon.manifest.permissions.iter().any(|p| p == "rcon") {
+                hide_addresses(&mut players);
+            }
+            players
+        }
+        "rcon.send" => state.server.command(&text("text")).map(|()| Value::Null)?,
+        "rcon.ask" => {
+            let command = text("text").trim().to_string();
+            if command.is_empty() {
+                return Err(invalid(t!("addons.error.emptyCommand")));
+            }
+            let timeout = std::time::Duration::from_millis(args.get("timeout").and_then(Value::as_u64).unwrap_or(5000).clamp(1000, 30_000));
+            let server = state.server.clone();
+            tauri::async_runtime::spawn_blocking(move || server.rcon_call(&command, timeout)).await.map_err(|e| e.to_string())?.map(Value::String)?
+        }
+        "server.stop" => stop_server(state, args.get("force").and_then(Value::as_bool).unwrap_or(false)).await.map(|()| Value::Null)?,
+        "server.restart" => restart_server(state).await.map(|()| Value::Null)?,
+        "kits.list" => to_json(&kits::load(&data))?,
+        "kits.give" => {
+            let wanted = text("kit");
+            let kit = kits::load(&data).into_iter().find(|k| k.id == wanted || k.name.eq_ignore_ascii_case(&wanted)).ok_or_else(|| AddonError::new("notFound", t!("addons.error.kit", kit = wanted)))?;
+            let players: Vec<String> = args.get("players").and_then(Value::as_array).map(|list| list.iter().filter_map(|p| p.as_str().map(str::to_string)).collect()).unwrap_or_default();
+            to_json(&kit_give(state, kit, players).await?)?
+        }
+        "maps.list" => to_json(&list_maps(state).await?)?,
+        // The bug reports of the map that runs (or ran last), as the Playtest page has them.
+        "reports.list" => {
+            let view = state.playtest.view();
+            serde_json::json!({ "map": view.map, "reports": view.reports })
+        }
+        "reports.setFixed" => {
+            let fixed = args.get("fixed").and_then(Value::as_bool).unwrap_or(true);
+            state.playtest.set_fixed(&report_id()?, fixed)?;
+            Value::Null
+        }
+        "reports.delete" => {
+            state.playtest.delete(&report_id()?)?;
+            Value::Null
+        }
+        // You (the server's owner) to where the report was made, in the game.
+        "reports.teleport" => {
+            let (playtest, report) = (state.playtest.clone(), report_id()?);
+            // A report that isn't there says so first (not that your Steam account is missing).
+            if !playtest.view().reports.iter().any(|r| r.id == report) {
+                return Err(AddonError::new("notFound", t!("bug.error.gone")));
+            }
+            tauri::async_runtime::spawn_blocking(move || playtest.teleport(Some(&report), None)).await.map_err(|e| e.to_string())??;
+            Value::Null
+        }
+        // Config files: the server's, Carbon's or Oxide's, the plugins' and the modules'.
+        "configs.list" => {
+            let folders = config_folders(&state);
+            let live = state.server.playtest_server();
+            let list = tauri::async_runtime::spawn_blocking(move || {
+                folders
+                    .into_iter()
+                    .map(|(id, dir)| {
+                        let running = live.as_ref().filter(|l| startfile::same_path(&l.dir, &dir));
+                        let identity = running.and_then(|l| l.identity_dir.as_ref()).and_then(|d| d.file_name()).and_then(|n| n.to_str()).map(str::to_string);
+                        let (files, identities) = configfiles::list(&dir);
+                        let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+                        configfiles::Folder { id, name, framework: mods::detect(&dir), running: running.is_some(), identity, identities, files }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+            serde_json::json!({ "folders": list })
+        }
+        "configs.read" | "configs.write" => {
+            let folders = config_folders(&state);
+            let (folder, path, body) = (text("folder"), text("path"), text("text"));
+            let modified = args.get("modified").and_then(Value::as_i64);
+            let writing = call == "configs.write";
+            tauri::async_runtime::spawn_blocking(move || -> Result<Value, AddonError> {
+                let dir = if folder.is_empty() { folders.first().map(|(_, d)| d.as_path()).ok_or_else(|| AddonError::new("notFound", t!("configs.error.noFolder", folder)))? } else { configfiles::folder_dir(&folders, &folder)? };
+                Ok(if writing { to_json(&configfiles::write(dir, &path, &body, modified)?)? } else { to_json(&configfiles::read(dir, &path)?)? })
+            })
+            .await
+            .map_err(|e| e.to_string())??
+        }
+        _ => return Err(AddonError::new("noCall", t!("addons.error.call", call))),
+    };
+    Ok(value)
+}
+
+/// An answer for an add-on.
+fn to_json<T: Serialize>(value: &T) -> CmdResult<serde_json::Value> {
+    serde_json::to_value(value).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// "See your server" gets the players without their IP addresses.
+    #[test]
+    fn the_player_list_goes_out_without_addresses() {
+        let mut players = serde_json::json!([
+            { "SteamID": "76561198000000001", "DisplayName": "Ted", "Address": "198.51.100.7:51234", "Ping": 12 },
+            { "SteamID": "76561198000000002", "DisplayName": "Ann", "Address": "198.51.100.8:51234", "Ping": 30 },
+        ]);
+        hide_addresses(&mut players);
+        assert_eq!(players[0], serde_json::json!({ "SteamID": "76561198000000001", "DisplayName": "Ted", "Ping": 12 }));
+        assert!(!players.to_string().contains("198.51.100"));
+        // Not a list (an error text from the server): left as it is.
+        let mut other = serde_json::json!("Command not found");
+        hide_addresses(&mut other);
+        assert_eq!(other, serde_json::json!("Command not found"));
+    }
+
+    /// Every call `droplaunch.has` names can be made (with its permission); one that isn't there
+    /// fails with a code an add-on can check.
+    #[test]
+    fn every_listed_call_exists_and_failures_have_codes() {
+        for call in ADDON_CALLS {
+            assert!(addon_permission(call).is_ok(), "{call} has no permission entry");
+        }
+        assert_eq!(addon_permission("reports.list"), Ok(Some("reports:read")));
+        assert_eq!(addon_permission("reports.teleport"), Ok(Some("reports:write")));
+        assert_eq!(addon_permission("steam.join").unwrap_err().code, "noCall");
+        // Errors from elsewhere get the code their text stands for.
+        assert_eq!(AddonError::from(t!("error.noServer")).code, "noServer");
+        assert_eq!(AddonError::from(t!("error.noAnswer")).code, "timeout");
+        assert_eq!(AddonError::from(t!("bug.error.gone")).code, "notFound");
+        assert_eq!(AddonError::from("Something else".to_string()).code, "failed");
+    }
 }

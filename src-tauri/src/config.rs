@@ -12,9 +12,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::advanced::Advanced;
 use crate::owner::SteamUser;
 use crate::startfile::{self, Use};
 use crate::steamcmd::appinfo::{build_number, Branch};
+use crate::steamcmd::command::UpdateCommand;
 use crate::steamcmd::manifest::InstalledServer;
 use crate::steamcmd::{install, manifest};
 
@@ -57,6 +59,9 @@ pub struct Config {
     pub update_check: bool,
     /// A server update also brings Carbon (or Oxide) to its newest version.
     pub update_framework: bool,
+    /// The SteamCMD command for downloading and updating the server files, when not DropLaunch's
+    /// own (`steamcmd::command`): its updates and the update .bat files use it.
+    pub steamcmd_update: Option<String>,
     /// "Don't show this again" on the new version's window (that version; the top bar's button stays).
     pub skipped_update: Option<String>,
     /// Made the owner (admin) of every DropLaunch server.
@@ -66,6 +71,8 @@ pub struct Config {
     pub whitelist: bool,
     /// Players let in besides the owner (Steam64 IDs).
     pub whitelist_ids: Vec<String>,
+    /// Testers whose bug reports are left out (Steam64 IDs): "Ignore this player" on a report.
+    pub ignored_testers: Vec<String>,
     /// Maps removed from the Rust game's cache are moved to ClientMapBackups in the data folder
     /// instead of deleted.
     pub backup_client_maps: bool,
@@ -90,6 +97,9 @@ pub struct Config {
     /// folder's StartFiles; None: DropLaunch's own settings): for the procedural map, for custom maps.
     pub procgen_start_file: Option<String>,
     pub maps_start_file: Option<String>,
+    /// Settings › Advanced: other download links, log texts, start arguments, one more watched
+    /// folder (see `advanced`).
+    pub advanced: Advanced,
     /// Last time DropLaunch ran from this folder, seconds since 1970 (a moved or copied
     /// DropLaunch starts from the newest entry).
     pub last_used: i64,
@@ -161,10 +171,12 @@ impl Default for Config {
             playtest: false,
             update_check: true,
             update_framework: true,
+            steamcmd_update: None,
             skipped_update: None,
             owner: None,
             whitelist: false,
             whitelist_ids: Vec::new(),
+            ignored_testers: Vec::new(),
             backup_client_maps: true,
             history: Vec::new(),
             welcomed: false,
@@ -175,6 +187,7 @@ impl Default for Config {
             guide: Guide::default(),
             procgen_start_file: None,
             maps_start_file: None,
+            advanced: Advanced::default(),
             last_used: 0,
             folder: String::new(),
             recent_maps: Vec::new(),
@@ -183,6 +196,11 @@ impl Default for Config {
 }
 
 impl Config {
+    /// The SteamCMD command server updates use (DropLaunch's own unless one is set).
+    pub fn update_command(&self) -> UpdateCommand {
+        UpdateCommand::from_setting(self.steamcmd_update.as_deref())
+    }
+
     /// Who the whitelist lets in: the owner first, then the players added. None: it's off (or
     /// there's no owner to let in, which would lock everyone out).
     pub fn whitelist_ids(&self) -> Option<Vec<String>> {
@@ -340,6 +358,7 @@ impl ConfigStore {
         }
         config.last_used = now();
         config.folder = base.to_string_lossy().into_owned();
+        crate::advanced::set(&config.advanced);
         // Folders that are gone don't need their settings any more (but a drive that isn't
         // plugged in right now, like a USB stick, comes back with its folders).
         folders.retain(|folder, _| still_there(Path::new(folder)));
@@ -493,6 +512,19 @@ impl ConfigStore {
         self.resolve(&self.config.maps_dir)
     }
 
+    /// The folder Settings › Advanced watches for map saves besides the maps folder (None: none,
+    /// or it's the maps folder or inside it, which is watched anyway).
+    pub fn watch_dir(&self) -> Option<PathBuf> {
+        let dir = self.resolve(self.config.advanced.watch_dir.as_deref()?);
+        let maps = self.maps_dir();
+        let inside = |a: &Path, b: &Path| {
+            let (a, b) = (a.to_string_lossy().to_lowercase(), b.to_string_lossy().to_lowercase());
+            let b = b.trim_end_matches(['\\', '/']);
+            a == b || a.starts_with(&format!("{b}\\")) || a.starts_with(&format!("{b}/"))
+        };
+        (!inside(&dir, &maps)).then_some(dir)
+    }
+
     /// The start file of yours chosen for `usage` (None: DropLaunch's own settings).
     pub fn chosen_start_file(&self, usage: Use) -> Option<PathBuf> {
         let name = match usage {
@@ -621,7 +653,7 @@ fn writable(dir: &Path) -> bool {
 }
 
 /// DropLaunch's home: the exe's folder, or DROPLAUNCH_HOME (handy while developing).
-fn base_dir() -> PathBuf {
+pub fn base_dir() -> PathBuf {
     if let Some(home) = std::env::var_os("DROPLAUNCH_HOME") {
         return PathBuf::from(home);
     }

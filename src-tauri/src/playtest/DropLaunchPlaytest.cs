@@ -4,11 +4,13 @@
 // playtest tools are on, and replaces or removes it: changes to this copy don't last.
 //
 //   /bug <what's wrong>        (chat, every player) a report with the player's position, view
-//                              and what they look at, printed to the log for DropLaunch.
+//                              and what they look at, printed to the log for DropLaunch
+//                              (30 an hour per player at most).
 //   /droplaunch kit [name]     (chat, admins) what the player wears, holds in the belt and the
 //                              inventory, printed to the log: DropLaunch adds it to its kits.
 //   Whitelist: when DropLaunch's whitelist is on (data/DropLaunch/whitelist.json, written by
-//   DropLaunch), only the players in it can join.
+//   DropLaunch), only the players in it can join. A file that's there but can't be read doesn't
+//   open the server: the list from the last login counts, and without one nobody gets in.
 //   Key: the lines for DropLaunch carry the key DropLaunch writes at every start
 //   (data/DropLaunch/key.json). Nobody in the game knows it, so chat typed to look like one of
 //   these lines isn't taken for a report.
@@ -22,16 +24,27 @@
 //   droplaunch.givekit <steamid|*> <slots>      (console / RCON) a kit into players' wear, belt and
 //                              inventory: slots are  w:0:hat.wolf:1;b:0:rifle.ak:1;m:3:ammo.rifle:128
 //                              (container w/b/m, slot, short name, amount).
+//
+// For other plugins:
+//   object CanDropLaunchReport(BasePlayer player, string text)   a hook before a report is sent:
+//                              anything but null stops it (tell the player why yourself).
+//   void OnDropLaunchReport(BasePlayer player, string text, Vector3 position, string grid)
+//                              a hook after a report was sent.
+//   bool DropLaunchReport(BasePlayer player, string text)        call it to send a report for a
+//                              player, as if they typed /bug (a button, a sign, a command):
+//                              [PluginReference] Plugin DropLaunchPlaytest;  then
+//                              DropLaunchPlaytest?.Call<bool>("DropLaunchReport", player, "text").
 using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using Oxide.Core;
+using Oxide.Core.Plugins;
 using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("DropLaunch", "DropLaunch", "1.5.0")]
+    [Info("DropLaunch", "DropLaunch", "1.6.0")]
     [Description("Testers type /bug in chat and the report shows up on DropLaunch's map, where they stood.")]
     public class DropLaunchPlaytest : RustPlugin
     {
@@ -40,9 +53,12 @@ namespace Oxide.Plugins
         private const string WhitelistFile = "DropLaunch/whitelist";
         private const string KeyFile = "DropLaunch/key";
         private const float Cooldown = 3f;
+        // Reports one player can send in an hour (DropLaunch keeps to the same number).
+        private const int PerHour = 30;
         private const int MaxText = 300;
         private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
         private readonly Dictionary<string, float> lastReport = new Dictionary<string, float>();
+        private readonly Dictionary<string, Queue<float>> lastHour = new Dictionary<string, Queue<float>>();
         private string gridJson;
 
         // ------------------------------------------------------------------ chat
@@ -50,12 +66,25 @@ namespace Oxide.Plugins
         [ChatCommand("bug")]
         private void BugCommand(BasePlayer player, string command, string[] args)
         {
-            if (player == null) return;
-            var text = string.Join(" ", args ?? new string[0]).Trim();
+            Report(player, string.Join(" ", args ?? new string[0]));
+        }
+
+        // Another plugin sends a report for a player (see the top of the file).
+        [HookMethod("DropLaunchReport")]
+        private bool ApiReport(BasePlayer player, string text)
+        {
+            return Report(player, text);
+        }
+
+        // A report from the player, as /bug sends it: true when it went to DropLaunch.
+        private bool Report(BasePlayer player, string text)
+        {
+            if (player == null) return false;
+            text = (text ?? "").Trim();
             if (text.Length == 0)
             {
                 player.ChatMessage("<color=#7a95e3>DropLaunch</color>: type <color=#e6b450>/bug</color> and what's wrong, like <color=#e6b450>/bug floating rock</color>. Where you stand and look goes with it.");
-                return;
+                return false;
             }
             if (text.Length > MaxText) text = text.Substring(0, MaxText);
             float last;
@@ -63,8 +92,23 @@ namespace Oxide.Plugins
             if (lastReport.TryGetValue(player.UserIDString, out last) && now - last < Cooldown)
             {
                 player.ChatMessage("<color=#7a95e3>DropLaunch</color>: one moment, then send the next one.");
-                return;
+                return false;
             }
+            Queue<float> sent;
+            if (!lastHour.TryGetValue(player.UserIDString, out sent))
+            {
+                sent = new Queue<float>();
+                lastHour[player.UserIDString] = sent;
+            }
+            while (sent.Count > 0 && now - sent.Peek() > 3600f) sent.Dequeue();
+            if (sent.Count >= PerHour)
+            {
+                player.ChatMessage("<color=#7a95e3>DropLaunch</color>: that's " + PerHour + " reports this hour, thanks! Send the next ones a bit later.");
+                return false;
+            }
+            // Another plugin may stop it (it tells the player why); then it doesn't count.
+            if (Interface.CallHook("CanDropLaunchReport", player, text) != null) return false;
+            sent.Enqueue(now);
             lastReport[player.UserIDString] = now;
 
             var pos = player.transform.position;
@@ -96,6 +140,8 @@ namespace Oxide.Plugins
             sb.Append('}');
             Puts(Marker + Key() + " " + sb);
             player.ChatMessage("<color=#7a95e3>DropLaunch</color>: bug report sent (" + (grid ?? "?") + ").");
+            Interface.CallHook("OnDropLaunchReport", player, text, pos, grid ?? "");
+            return true;
         }
 
         [ChatCommand("droplaunch")]
@@ -188,18 +234,38 @@ namespace Oxide.Plugins
             public List<string> ids = new List<string>();
         }
 
+        /// The whitelist as it was read at the last login that could read it.
+        private WhitelistData lastWhitelist;
+
         /// DropLaunch's whitelist, read at every login (so a change counts right away). Off, or
-        /// nobody in it: everyone can join.
+        /// nobody in it, or no file at all: everyone can join. A file that's there but can't be
+        /// read (damaged, or in use for a moment) doesn't open the server: the list from the last
+        /// login counts, and without one nobody gets in until it can be read again.
         private object CanUserLogin(string name, string id, string ipAddress)
         {
             WhitelistData list = null;
+            var there = false;
             try
             {
-                if (Interface.Oxide.DataFileSystem.ExistsDatafile(WhitelistFile)) list = Interface.Oxide.DataFileSystem.ReadObject<WhitelistData>(WhitelistFile);
+                there = Interface.Oxide.DataFileSystem.ExistsDatafile(WhitelistFile);
+                if (there) list = Interface.Oxide.DataFileSystem.ReadObject<WhitelistData>(WhitelistFile);
             }
             catch (Exception)
             {
                 list = null;
+            }
+            if (there && list == null)
+            {
+                if (lastWhitelist == null)
+                {
+                    Puts("DropLaunch's whitelist can't be read right now, not let in: " + (name ?? "") + " (" + id + ")");
+                    return "This test server's whitelist can't be read right now: try again in a moment.";
+                }
+                list = lastWhitelist;
+            }
+            else
+            {
+                lastWhitelist = list;
             }
             if (list == null || !list.on || list.ids == null || list.ids.Count == 0 || list.ids.Contains(id)) return null;
             Puts("Not on DropLaunch's whitelist, not let in: " + (name ?? "") + " (" + id + ")");

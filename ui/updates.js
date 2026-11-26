@@ -7,6 +7,44 @@ import { t } from "./i18n.js";
 
 const RELEASES = "https://github.com/tedpommes/DropLaunch/releases/latest";
 const RECHECK_MS = 6 * 3600 * 1000;
+/** A line of the notes this short, not starting with "- ", heads the changes below it. */
+const LONGEST_HEADING = 40;
+/** A change's words before its first ": " are its title when they're this short. */
+const LONGEST_TITLE = 48;
+
+/** The release notes (plain text) as a list: "- " starts a change, a short line of its own
+ *  ("SAFER", "FIXED") heads the changes below it, a longer one is a paragraph, empty lines don't
+ *  count. A change's first words up to ": " are shown in bold. Nothing in the notes is read as
+ *  HTML. Older DropLaunch versions show the same text as it is (empty lines too), so it has to
+ *  read well that way as well. */
+function showNotes(box, text) {
+  box.replaceChildren();
+  let list = null;
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const change = /^[-*\u2022]\s+(.*)$/.exec(line);
+    if (!change) {
+      list = null;
+      const heading = line.length <= LONGEST_HEADING;
+      const el = document.createElement(heading ? "h3" : "p");
+      el.textContent = heading ? line.replace(/^#+\s*/, "").replace(/:$/, "") : line;
+      box.append(el);
+      continue;
+    }
+    if (!list) list = box.appendChild(document.createElement("ul"));
+    const item = list.appendChild(document.createElement("li"));
+    const body = change[1];
+    const colon = body.indexOf(": ");
+    if (colon > 0 && colon <= LONGEST_TITLE && !/[.?!]/.test(body.slice(0, colon))) {
+      const title = document.createElement("strong");
+      title.textContent = body.slice(0, colon);
+      item.append(title, body.slice(colon));
+    } else {
+      item.textContent = body;
+    }
+  }
+}
 
 export function initUpdates(ctx) {
   let update = null;
@@ -39,7 +77,8 @@ export function initUpdates(ctx) {
     const sub = { current: update.current, date: update.published, size: fmtBytes(update.size) };
     $("app-update-sub").textContent = update.published ? t("update.subReleased", sub) : t("update.sub", sub);
     const notes = $("app-update-notes");
-    notes.textContent = update.notes || "";
+    showNotes(notes, update.notes || "");
+    notes.scrollTop = 0;
     notes.hidden = !update.notes;
     const lines = [t("update.note.restart")];
     if (ctx.server?.isLive()) lines.push(t("update.note.server"));

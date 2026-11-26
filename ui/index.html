@@ -52,6 +52,7 @@
         <symbol id="i-bug" viewBox="0 0 24 24"><path d="M9 7.5a3 3 0 0 1 6 0M7.5 10h9v4.5a4.5 4.5 0 0 1-9 0zM12 10v9M4 13.5h3.5M16.5 13.5H20M5.5 8.5l2.2 1.7M18.5 8.5l-2.2 1.7M5.5 19l2.4-1.8M18.5 19l-2.4-1.8" /></symbol>
         <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
         <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14" /></symbol>
+        <symbol id="i-puzzle" viewBox="0 0 24 24"><path d="M10 4.5a2 2 0 0 1 4 0V6h4a1 1 0 0 1 1 1v4h-1.5a2 2 0 0 0 0 4H19v4a1 1 0 0 1-1 1h-4v-1.5a2 2 0 0 0-4 0V20H6a1 1 0 0 1-1-1v-4h1.5a2 2 0 0 0 0-4H5V7a1 1 0 0 1 1-1h4z" /></symbol>
         <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9.5 18h5M10.5 21h3M12 3a6 6 0 0 0-3.7 10.7c.7.6 1.2 1.4 1.2 2.3h5c0-.9.5-1.7 1.2-2.3A6 6 0 0 0 12 3z" /></symbol>
         <symbol id="i-cloud" viewBox="0 0 24 24"><path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97A7 7 0 0 0 4.4 11.6 3.75 3.75 0 0 0 6.5 19z" /><path d="M12 11v5M9.5 13.5 12 11l2.5 2.5" /></symbol>
         <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z" /></symbol>
@@ -390,11 +391,11 @@
               <li data-task="server"><span class="task-icon"></span><div class="task-body"><div class="task-title" data-t="setup.task.server"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>
               <li data-task="framework"><span class="task-icon"></span><div class="task-body"><div class="task-title" id="task-framework-title" data-t="common.modFramework"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>
               <li data-task="startfile"><span class="task-icon"></span><div class="task-body"><div class="task-title" data-t="setup.task.startfile"></div><div class="task-detail"></div><div class="task-bar"><div></div></div></div></li>            </ol>
-            <div class="setup-log" id="setup-log" hidden></div>
           </div>
         </section>
 
-        <!-- 2 and 3: the choices, also while the files download (they're used once the download is done).
+        <!-- 2 and 3: the choices, also while the files download (they're used once the download is done,
+             then they stay in view, locked, until it's finished).
              What works without mods comes first; the mod options show once Carbon or Oxide is picked. -->
         <div class="setup-options" id="setup-options">
           <section class="setup-step">
@@ -475,12 +476,12 @@
         <div class="setup-actions" id="setup-actions">
           <button class="btn btn-link" id="setup-later" data-t="setup.later"></button>
           <span class="spacer"></span>
+          <!-- While it runs: on the right, and Next takes its place once it's done. -->
           <label class="check setup-auto" id="setup-auto-row" hidden>
             <input type="checkbox" id="setup-auto" />
             <span class="box"><svg><use href="#i-check" /></svg></span>
             <span class="check-text" data-t="setup.autoContinue"></span>
           </label>
-          <button class="btn btn-danger" id="setup-cancel" hidden><svg><use href="#i-x" /></svg><span data-t="common.cancel"></span></button>
           <button class="btn btn-primary btn-lg" id="setup-next" hidden><span data-t="setup.next"></span><svg><use href="#i-arrow-right" /></svg></button>
           <button class="btn btn-primary btn-lg" id="setup-fix"><svg><use href="#i-wrench" /></svg><span id="setup-fix-label" data-t="setup.fix"></span></button>
           <button class="btn btn-primary btn-lg countdown" id="setup-close" hidden><span id="setup-close-label" data-t="setup.continue"></span><i class="countdown-bar" id="setup-countdown"></i></button>

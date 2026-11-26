@@ -1,3 +1,54 @@
+DropLaunch
+Copyright (C) 2026 TedPommes
+
+DropLaunch is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version, with the additional permission below. The license text follows after
+it, unchanged.
+
+
+                        DROPLAUNCH ADD-ON EXCEPTION
+     Additional permission under GNU GPL version 3, section 7
+
+1. Definitions
+
+   "DropLaunch" means this program, in source or compiled form.
+
+   "Add-on API" means the interface DropLaunch documents for add-ons in
+   addons/README.md: the addon.json manifest, the .dladdon package format,
+   and the messages an add-on page exchanges with DropLaunch, through the
+   add-on SDK (addons/_sdk) or directly, in any version DropLaunch documents.
+
+   An "Add-on" is a work that DropLaunch loads as an add-on and that interacts
+   with DropLaunch only through the Add-on API. An Add-on may contain the
+   add-on SDK and anything else in the addons/ folder, which are under the
+   MIT License. It contains no other part of DropLaunch.
+
+2. Permission
+
+   As a special exception, the copyright holders of DropLaunch give you
+   permission to make, use, convey, sell and license Add-ons under terms of
+   your choice, including closed-source and paid terms, and to combine them
+   with DropLaunch and convey them together with DropLaunch, without those
+   Add-ons becoming subject to the GNU General Public License.
+
+3. What stays under the GNU General Public License
+
+   DropLaunch itself, and any modified version of it, stays under the GNU
+   General Public License. This permission does not cover work that copies
+   or modifies code from DropLaunch outside the addons/ folder, or work that
+   interacts with DropLaunch in other ways than the Add-on API.
+
+4. Modified versions
+
+   If you modify DropLaunch, you may extend this exception to your version,
+   but you are not obliged to do so. If you do not wish to do so, delete
+   this exception from your version.
+
+
+--------------------------------------------------------------------------------
+
                     GNU GENERAL PUBLIC LICENSE
                        Version 3, 29 June 2007
 

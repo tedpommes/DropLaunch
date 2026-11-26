@@ -1,6 +1,7 @@
 //! Everything that talks to SteamCMD.
 
 pub mod appinfo;
+pub mod command;
 pub mod install;
 pub mod manifest;
 pub mod parser;

@@ -14,11 +14,11 @@ pub const EXECUTABLE: &str = "steamcmd.exe";
 pub const EXECUTABLE: &str = "steamcmd.sh";
 
 #[cfg(windows)]
-const DOWNLOAD_URL: &str = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip";
+pub(crate) const DOWNLOAD_URL: &str = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip";
 #[cfg(target_os = "linux")]
-const DOWNLOAD_URL: &str = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz";
+pub(crate) const DOWNLOAD_URL: &str = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz";
 #[cfg(target_os = "macos")]
-const DOWNLOAD_URL: &str = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_osx.tar.gz";
+pub(crate) const DOWNLOAD_URL: &str = "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_osx.tar.gz";
 
 pub fn executable(dir: &Path) -> PathBuf {
     dir.join(EXECUTABLE)
@@ -42,12 +42,13 @@ pub fn tidy(dir: &Path) {
     }
 }
 
-/// Download and unpack SteamCMD into `dir`; `progress(done, total)` is called while downloading.
+/// Download (from Settings › Advanced's link when one is set) and unpack SteamCMD into `dir`;
+/// `progress(done, total)` is called while downloading.
 pub fn install(dir: &Path, cancel: &CancelToken, progress: &mut dyn FnMut(u64, Option<u64>)) -> Result<()> {
     fs::create_dir_all(dir).with_context(|| t!("error.create", dir = dir.display()))?;
-    let name = DOWNLOAD_URL.rsplit('/').next().unwrap_or("steamcmd.zip");
-    let file = dir.join(name);
-    archive::download(DOWNLOAD_URL, &file, cancel, progress)?;
+    let link = crate::advanced::Link::Steamcmd;
+    let file = dir.join(link.file_name());
+    archive::download(&link.url(), &file, cancel, progress)?;
     let unpacked = archive::extract(&file, dir);
     let _ = fs::remove_file(&file);
     unpacked?;

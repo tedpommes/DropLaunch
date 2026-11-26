@@ -1,6 +1,6 @@
 // DropLaunch v2 UI. Talks to the Rust side through Tauri's invoke(), Channel streams and events.
 import "./theme.js";
-import { $, el, icon, pathChip, invoke, Channel, fmtBytes, fmtDate, fmtAgo, fmtDuration, fileName, buildNum, toast, confirmDialog, copyText, Rate, followScroll, sizeTag, fitPath, driveOf } from "./util.js";
+import { $, el, icon, pathChip, invoke, Channel, fmtBytes, fmtDate, fmtAgo, fmtDuration, fileName, buildNum, toast, confirmDialog, copyText, Rate, followScroll, sizeTag, fitPath, driveOf, pointAt, holdDuringPress } from "./util.js";
 import { Dropdown } from "./dropdown.js";
 import { initMaps, isStartFile } from "./maps.js";
 import { initServer } from "./server.js";
@@ -13,6 +13,7 @@ import { initMapViewer } from "./mapviewer.js";
 import { initGuide } from "./guide.js";
 import { initSettings } from "./settings.js";
 import { initKits } from "./kits.js";
+import { initAddons } from "./addons.js";
 import { t, tn, rich, fmtList } from "./i18n.js";
 
 const MAX_LOG_LINES = 4000;
@@ -48,6 +49,7 @@ const ctx = {
   setTab,
   setExpanded,
   showFiles,
+  showCard,
   spaceTag,
   reapplyOxide,
   /** A SteamCMD job runs. */
@@ -95,14 +97,18 @@ function runningHere() {
 function setTab(name) {
   ctx.playtest?.close();
   if (!expanded) name = "maps";
+  // An add-on's page (addons.js) that isn't there (any more): the Maps page.
+  if (name.startsWith("addon:") && !ctx.addons?.isTab(name)) name = "maps";
   if (ctx.layout?.maximized()) ctx.layout.setMaximized(null);
   for (const tab of document.querySelectorAll(".tabs [role=tab]")) {
     tab.setAttribute("aria-selected", String(tab.dataset.tab === name));
   }
   $("view-maps").hidden = name !== "maps";
   $("view-files").hidden = name !== "files";
+  for (const view of document.querySelectorAll(".addon-view")) view.hidden = view.dataset.tab !== name;
   if (name === "maps") ctx.server?.reveal();
-  else logScroll.reveal();
+  else if (name === "files") logScroll.reveal();
+  ctx.addons?.tabChanged(name);
 }
 
 // The simple view is a narrower window (it opens at its smallest size); each view keeps the
@@ -211,6 +217,15 @@ function showFiles() {
   setTab("files");
 }
 
+/** A card on the Maps page (more options), unfolded and pointed at: where a toast led. */
+function showCard(id) {
+  setExpanded(true);
+  setTab("maps");
+  const card = $(id);
+  if (card?.classList.contains("folded")) card.querySelector(".fold-btn")?.click();
+  pointAt(card);
+}
+
 // ---------------------------------------------------------------- state
 /** An installed branch (each has its own folder), or null. */
 function installedBranch(branch) {
@@ -263,6 +278,9 @@ function setPill(node, cls, text, short) {
 
 function render() {
   if (!state) return;
+  // Not under a button being pressed on the Files page (its rows are drawn anew): that click
+  // would be lost. (The Maps page's cards hold back their own redraws.)
+  if (holdDuringPress($("view-files"), render)) return;
   const server = state.server;
   const serverFolder = state.folders.find((f) => f.key === "server");
   const status = buildStatus();
@@ -505,7 +523,10 @@ async function useBranch(branch) {
 /** A branch that isn't installed: it goes into its own folder next to the others (setup). */
 async function addBranch(branch) {
   if (busy) {
-    toast(t("files.addBranch.busy"));
+    toast(t("files.addBranch.busy"), "", () => {
+      setTab("maps");
+      pointAt($("strip"));
+    });
     return;
   }
   const current = state.installs?.find((i) => i.active)?.branch ?? state.server?.branch;
@@ -833,7 +854,8 @@ async function checkForUpdates() {
 // ---------------------------------------------------------------- one-click setup
 /** opened: setup was needed when the window opened (its title stays "Let's get DropLaunch ready"). */
 /** adding: a branch set up next to the installed ones; folder: where the chosen branch is or goes. */
-const setupState = { framework: "carbon", running: false, startMap: null, live: false, opened: false, adding: null, folder: null, dropped: false };
+/** view: what the window shows (see showSetupView). */
+const setupState = { framework: "carbon", running: false, startMap: null, live: false, opened: false, adding: null, folder: null, dropped: false, view: "options" };
 /**
  * What the user wants of the options that need a mod framework (or Carbon): with None they're
  * unticked and greyed out, and back as they were once Carbon or Oxide is picked again.
@@ -867,6 +889,8 @@ let countdownTimer = null;
 async function openSetup(pendingMap = null, { auto = false, branch = null } = {}) {
   if (busy) return;
   const needed = state.setupNeeded;
+  // Before the folders are rendered: their title and lead are the options' again.
+  setupState.view = "options";
   setupState.opened = needed;
   setupState.adding = branch;
   // A map dropped on a folder without the server files: setting up is how it gets started.
@@ -923,22 +947,25 @@ function renderSetupFolders() {
   const needed = state.setupNeeded;
   const adding = setupState.adding;
   const current = state.installs?.find((i) => i.active)?.branch;
-  $("setup-title").textContent = adding
-    ? t("setup.title.add", { branch: adding })
-    : setupState.dropped
-      ? t("setup.title.dropped")
-      : setupState.opened
-        ? t("setup.title.ready")
-        : t("setup.title.options");
-  $("setup-lead").textContent = adding
-    ? current
-      ? t("setup.lead.add", { branch: adding, current })
-      : t("setup.lead.addFirst", { branch: adding })
-    : needed
-      ? t("setup.lead.needed")
-      : setupState.opened
-        ? t("setup.lead.both")
-        : t("setup.lead.options");
+  // Not over what it says while it runs or how it went (a refresh then would bring these back).
+  if (setupState.view === "options" || $("setup").hidden) {
+    $("setup-title").textContent = adding
+      ? t("setup.title.add", { branch: adding })
+      : setupState.dropped
+        ? t("setup.title.dropped")
+        : setupState.opened
+          ? t("setup.title.ready")
+          : t("setup.title.options");
+    $("setup-lead").textContent = adding
+      ? current
+        ? t("setup.lead.add", { branch: adding, current })
+        : t("setup.lead.addFirst", { branch: adding })
+      : needed
+        ? t("setup.lead.needed")
+        : setupState.opened
+          ? t("setup.lead.both")
+          : t("setup.lead.options");
+  }
   const folder = (key) => state.folders.find((f) => f.key === key);
   const steamcmd = folder("steamcmd");
   // The branch picked here: its own folder (the active one's when nothing else was picked).
@@ -1016,17 +1043,12 @@ async function pickSetupFolder(f) {
   }
 }
 
-/**
- * A setup that finished with Continue when done unticked waits here: its steps stay in view until
- * Next (or the window is closed), then it says how it went.
- */
-let setupNext = null;
-
-/** Also while it runs: it carries on in the background (the Maps page shows how far it is). */
+/** Also while it runs: it carries on in the background (the Maps page shows how far it is), also
+ * past the downloads without waiting for Next. */
 function closeSetup() {
-  setupNext?.();
   stopCountdown();
   $("setup").hidden = true;
+  pushLiveOptions();
   applyBusy();
   renderStrip();
 }
@@ -1034,6 +1056,7 @@ function closeSetup() {
 /** Back to the setup window (from the Maps page, while it runs in the background). */
 function showSetup() {
   $("setup").hidden = false;
+  pushLiveOptions();
   applyBusy();
   renderStrip();
 }
@@ -1232,31 +1255,64 @@ function renderWhitelistOption() {
   $("setup-whitelist-row").hidden = !owner;
 }
 
-/** options -> running -> (done) -> result. While SteamCMD downloads ("live"), the options stay
- * open. Step 1 shows the downloads first, then how far setting up is. "done": finished with
- * Continue when done unticked, the steps stay in view and Cancel is Next. */
-function showSetupView(view) {
-  const done = view === "done";
-  const running = view === "running" || done;
-  const live = view === "running" && setupState.live;
-  $("setup-step-download").textContent = view === "options" ? t("setup.step.download") : t("setup.step.running");
+/**
+ * options -> running -> (held) -> finishing -> result. Step 1 shows the downloads first, then how
+ * far setting up is.
+ * - running: the options stay open while SteamCMD downloads ("live"); Continue when done sits on
+ *   the right.
+ * - held: downloaded, with Continue when done unticked: the options (the owner too) can still
+ *   change, and Next, in the checkbox's place, goes on. Nothing is installed or started before.
+ * - finishing: the rest (mod framework, start file, owner, starting the server), only the steps.
+ * - result: how it went; when it worked (`ok`), "DropLaunch is ready" on top, centred, and no
+ *   result box (a failed or cancelled setup keeps it, with what went wrong).
+ */
+function showSetupView(view, { ok = false } = {}) {
+  setupState.view = view;
+  const choosing = view === "running" || view === "held";
+  const working = choosing || view === "finishing";
+  const ready = view === "result" && ok;
+  $("setup").querySelector(".setup").classList.toggle("finished", ready);
+  if (ready) $("setup-title").textContent = t("setup.title.done");
+  $("setup-lead").hidden = ready;
+  $("setup-step-download").textContent = view === "options" ? t("setup.step.download") : ready ? t("setup.step.done") : t("setup.step.running");
   $("setup-reqs").hidden = view !== "options";
-  $("setup-options").hidden = !(view === "options" || live);
-  $("setup-branch-row").hidden = running;
+  $("setup-options").hidden = !(view === "options" || choosing);
+  // Picked before it starts (and to try again): once it worked there's nothing to pick.
+  $("setup-branch-row").hidden = working || ready;
   $("setup-tasks").hidden = view === "options";
-  $("setup-tasks").classList.toggle("compact", live);
-  $("setup-log").hidden = !running || live;
-  $("setup-result").hidden = view !== "result";
+  $("setup-tasks").classList.toggle("compact", choosing);
+  // Only when it didn't work: once it did, the title says so already.
+  $("setup-result").hidden = view !== "result" || ready;
   // While it runs it can be hidden: a server from another branch can be used meanwhile.
-  if (running) $("setup-later").textContent = t("setup.hide");
-  $("setup-later").title = running ? t("setup.hide.title") : "";
-  $("setup-later").hidden = done;
-  $("setup-cancel").hidden = !running || done;
-  $("setup-auto-row").hidden = !running || done;
-  $("setup-next").hidden = !done;
-  $("setup-fix").hidden = running;
+  if (working) $("setup-later").textContent = t("setup.hide");
+  $("setup-later").title = working ? t("setup.hide.title") : "";
+  $("setup-later").hidden = view === "held";
+  $("setup-auto-row").hidden = view !== "running";
+  $("setup-next").hidden = view !== "held";
+  $("setup-fix").hidden = working;
   $("setup-close").hidden = true;
   $("setup-actions").classList.remove("centered");
+}
+
+/** Setup waits for Next after the downloads while its window is open with Continue when done
+ * unticked (hidden, it carries on by itself). */
+function holdWanted() {
+  return setupState.live && !$("setup-auto").checked && !$("setup").hidden;
+}
+
+/** Next, once the downloads are done: the owner is checked and saved, then the rest runs with the
+ * options as they are now. */
+async function setupGoOn() {
+  if (setupState.view !== "held") return;
+  clearTimeout(ownerTimer);
+  // A typo in the Steam64 ID stops here, before anything is installed.
+  if (!(await saveOwner())) return;
+  const options = { ...setupOptions(), hold: false };
+  setupState.live = false;
+  setupTaskTitles(options);
+  $("setup-lead").textContent = t("setup.lead.quick");
+  showSetupView("finishing");
+  invoke("update_setup_options", { options }).catch(() => {});
 }
 
 /** What the setup window says right now. */
@@ -1279,10 +1335,11 @@ function setupTaskTitles(options) {
   const frameworkTitle = { none: t("common.modFramework"), carbon: FRAMEWORK_NAMES.carbon, oxide: FRAMEWORK_NAMES.oxide }[options.framework];
   $("task-framework-title").textContent = options.rustedit ? t("setup.task.frameworkRustedit", { framework: frameworkTitle }) : frameworkTitle;}
 
-/** Options changed while SteamCMD downloads: the job uses them when it gets there. */
+/** Options changed while SteamCMD downloads (or setup waits for Next): the job uses them when it
+ * gets there. Also whether it waits for Next (Continue when done, the window hidden or shown). */
 function pushLiveOptions() {
   if (!setupState.running || !setupState.live) return;
-  const options = setupOptions();
+  const options = { ...setupOptions(), hold: holdWanted() };
   setupTaskTitles(options);
   invoke("update_setup_options", { options }).catch(() => {});
 }
@@ -1314,21 +1371,24 @@ function setTaskProgress(text, percent, meta) {
   if (percent != null) li.querySelector(".task-bar div").style.width = `${Math.min(100, percent)}%`;
 }
 
-function pushSetupLog(text, source) {
-  const box = $("setup-log");
-  box.append(el("div", { text, style: source === "error" ? "color: var(--danger)" : null }));
-  while (box.childElementCount > 5) box.firstElementChild.remove();
-}
-
 function onSetupEvent(ev) {
   switch (ev.kind) {
     case "task":
-      // Past the download: the options are used now, so they close.
+      // Past the downloads (Continue when done ticked, or the window hidden): the job uses the
+      // options now, so they close and the rest shows.
       if (setupState.live && ev.task !== "steamcmd" && ev.task !== "server") {
         setupState.live = false;
-        showSetupView("running");
+        $("setup-lead").textContent = t("setup.lead.quick");
+        showSetupView("finishing");
       }
       setTask(ev.task, ev.state, ev.detail);
+      break;
+    case "held":
+      // Downloaded: it waits for Next, the options can still change.
+      $("setup-lead").textContent = t("setup.lead.held");
+      showSetupView("held");
+      // Not out of a field that's being typed in (the Steam64 ID).
+      if (!$("setup-options").contains(document.activeElement)) $("setup-next").focus();
       break;
     case "status":
       setTaskProgress(ev.text, null, "");
@@ -1340,7 +1400,6 @@ function onSetupEvent(ev) {
       break;
     case "line":
       appendLog(ev.text, ev.source);
-      pushSetupLog(ev.text, ev.source);
       break;
   }
 }
@@ -1357,7 +1416,6 @@ async function runSetup() {
     li.className = "";
     li.querySelector(".task-detail").textContent = "";
   });
-  $("setup-log").replaceChildren();
   const map = setupState.startMap && options.startServer ? setupState.startMap.name : null;
   // The branch being set up (it has its own folder): is it there already?
   const serverHere = setupState.folder ? Boolean(setupState.folder.installed) : Boolean(state.server);
@@ -1371,11 +1429,12 @@ async function runSetup() {
         ? t("setup.lead.runningMap", { map })
         : t("setup.lead.running");
   setupState.running = true;
-  // Unticked: once it's done the window waits for Next.
+  // Unticked: once the downloads are done the window waits for Next.
   $("setup-auto").checked = false;
-  // Something to download: the options stay open meanwhile.
+  // Something to download: the options stay open meanwhile (and until Next).
   setupState.live = !(state.steamcmdFound ?? state.steamcmdInstalled) || !serverHere;
-  showSetupView("running");
+  options.hold = holdWanted();
+  showSetupView(setupState.live ? "running" : "finishing");
   busy = true;
   // Servers keep starting from the branch in use while another one is set up.
   jobBranch = options.branch;
@@ -1402,18 +1461,7 @@ async function runSetup() {
   await refresh();
   ctx.maps.reload();
   // It ran in the background: say how it went on the Maps page.
-  const background = $("setup").hidden;
-  if (background) stripSetupResult(summary, options);
-  // Continue when done unticked: the finished steps stay in view, and Next shows how it went.
-  if (summary.ok && !background && !$("setup-auto").checked) {
-    $("setup-lead").textContent = t("setup.lead.done");
-    showSetupView("done");
-    $("setup-next").focus();
-    await new Promise((resolve) => (setupNext = resolve));
-    setupNext = null;
-    // Closed instead (Esc): the Maps page says how it went.
-    if ($("setup").hidden) stripSetupResult(summary, options);
-  }
+  if ($("setup").hidden) stripSetupResult(summary, options);
 
   $("setup-lead").textContent = summary.ok ? t("setup.lead.done") : summary.cancelled ? t("setup.lead.stopped") : t("setup.lead.failed");
   const box = $("setup-result");
@@ -1423,7 +1471,7 @@ async function runSetup() {
   $("setup-result-title").textContent = summary.ok ? summary.title : summary.cancelled ? t("setup.cancelled") : t("setup.failed");
   $("setup-result-detail").textContent = summary.ok ? summary.detail : summary.cancelled ? t("setup.cancelled.detail") : summary.detail;
 
-  showSetupView("result");
+  showSetupView("result", { ok: summary.ok });
   $("setup-fix").hidden = summary.ok;
   $("setup-fix-label").textContent = t("setup.tryAgain");
   $("setup-later").hidden = summary.ok;
@@ -1664,21 +1712,22 @@ async function askSkipWelcome() {
   if (answer !== "skip") return;
   $("welcome").hidden = true;
   await ctx.setOption({ welcomed: true });
-  toast(t("welcome.skip.later"));
+  toast(t("welcome.skip.later"), "", () => {
+    setTab("maps");
+    pointAt($("strip"));
+  });
 }
 $("welcome").addEventListener("click", (e) => e.target === $("welcome") && askSkipWelcome());
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("welcome").hidden && $("modal").hidden) askSkipWelcome();
 });
 $("setup-close").addEventListener("click", closeSetup);
-$("setup-next").addEventListener("click", () => setupNext?.());
+$("setup-next").addEventListener("click", setupGoOn);
+// Ticked while it downloads: it goes on by itself once the downloads are done.
+$("setup-auto").addEventListener("change", pushLiveOptions);
 // An option's (i) sits in its label: a click there shows what it does, it doesn't switch it.
 $("setup").addEventListener("click", (e) => {
   if (e.target.closest(".opt-info") && !e.target.closest("a")) e.preventDefault();
-});
-$("setup-cancel").addEventListener("click", () => {
-  $("setup-cancel").disabled = true;
-  invoke("cancel_job").finally(() => ($("setup-cancel").disabled = false));
 });
 
 document.addEventListener("keydown", (e) => {
@@ -1725,6 +1774,7 @@ ctx.mapViewer = initMapViewer(ctx);
 ctx.guide = initGuide(ctx);
 ctx.settings = initSettings(ctx);
 ctx.kits = initKits(ctx);
+ctx.addons = initAddons(ctx);
 // Always opens in the simple view on the Maps page (the window starts at its size); setup takes
 // over when something's missing.
 setExpanded(false, { resize: false });

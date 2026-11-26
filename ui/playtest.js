@@ -1,7 +1,7 @@
 // The playtest page: bug reports testers send with /bug in Rust's chat, as pins on a picture of
 // the map where they stood, live, with who's where right now. The backend (playtest/) keeps the
 // reports per map (across its versions) and puts a small plugin in the server that sends them.
-import { $, el, icon, invoke, toast, confirmDialog, desktopNotify, onNotificationClick, fmtAgo, fmtWhen } from "./util.js";
+import { $, el, icon, invoke, toast, confirmDialog, desktopNotify, onNotificationClick, fmtAgo, fmtWhen, revealFile } from "./util.js";
 import { MapCanvas, readPicture, reportPin } from "./mapcanvas.js";
 import { contextMenu } from "./menu.js";
 import { t, tn, language } from "./i18n.js";
@@ -84,6 +84,13 @@ export function initPlaytest(ctx) {
   function close() {
     page.hidden = true;
     document.body.classList.remove("playtest-open");
+  }
+
+  /** Bug reports open on this one (where its toast led). */
+  function openReport(id) {
+    ctx.settings?.close();
+    open();
+    if (view?.reports.some((r) => r.id === id)) select(id, { scroll: true, center: true });
   }
 
   // ---------------------------------------------------------------- the map's picture
@@ -272,9 +279,17 @@ export function initPlaytest(ctx) {
     return parts.filter(Boolean).join(" · ");
   }
 
+  /** A report sent again at the same spot (playtest/mod.rs folds them): how often, and by whom. */
+  function repeatNote(r) {
+    if (!r.repeats) return "";
+    const names = [...new Set((r.also ?? []).map((a) => a.name).filter((name) => name && name !== r.name))];
+    return names.length ? tn("playtest.note.repeatsBy", r.repeats + 1, { names: names.join(", ") }) : tn("playtest.note.repeats", r.repeats + 1);
+  }
+
   function versionNote(r) {
     const current = view?.map?.version;
     const notes = [];
+    if (r.repeats) notes.push(repeatNote(r));
     if (r.version && r.version !== current) notes.push(t("playtest.note.reportedOn", { version: r.version }));
     if (r.fixed) {
       const ago = fmtAgo(r.fixed.time / 1000);
@@ -492,8 +507,20 @@ export function initPlaytest(ctx) {
   const setEnabled = (on) => call("playtest_set_enabled", { on });
 
   async function remove(r) {
-    const ok = await confirmDialog({ title: t("playtest.delete.confirm.title", { n: r.n }), text: t("playtest.delete.confirm.text", { text: r.text, name: r.name }), ok: t("playtest.delete") });
-    if (ok) call("playtest_delete", { id: r.id });
+    const name = r.name || r.steamId;
+    const choices = [{ label: t("playtest.delete"), value: "delete", primary: true }];
+    // A tester who sends report after report: theirs are left out from now on.
+    if (r.steamId) choices.unshift({ label: t("playtest.ignore", { name }), value: "ignore", danger: true });
+    const answer = await confirmDialog({ title: t("playtest.delete.confirm.title", { n: r.n }), text: t("playtest.delete.confirm.text", { text: r.text, name: r.name }), choices });
+    if (answer === "delete") return call("playtest_delete", { id: r.id });
+    if (answer !== "ignore") return;
+    try {
+      const next = await invoke("playtest_ignore", { steamId: r.steamId });
+      apply(next.reports.some((x) => x.id === r.id) ? await invoke("playtest_delete", { id: r.id }) : next);
+      toast(t("playtest.ignored", { name }), "ok", () => ctx.settings.open("servers", { point: "#set-ignored" }));
+    } catch (err) {
+      toast(String(err), "error");
+    }
   }
 
   async function teleport(target, what) {
@@ -565,7 +592,7 @@ footer{margin-top:24px;color:#80868f;font-size:12px}@media(max-width:800px){.wra
 <footer>${escapeHtml(t("playtest.export.footer"))}</footer></main></body></html>`;
     try {
       const path = await invoke("playtest_save_report", { html, name: t("playtest.export.fileName", { map: title, date: new Date().toISOString().slice(0, 10) }) });
-      if (path) toast(t("playtest.export.saved", { path }), "ok");
+      if (path) toast(t("playtest.export.saved", { path }), "ok", () => revealFile(path));
     } catch (err) {
       toast(String(err), "error");
     }
@@ -580,12 +607,18 @@ footer{margin-top:24px;color:#80868f;font-size:12px}@media(max-width:800px){.wra
     if (known && next.map?.key === view?.map?.key) {
       for (const r of next.reports) {
         if (known.has(r.id)) continue;
-        toast(t("playtest.newBug", { n: r.n, name: r.name, grid: r.grid, text: r.text }), "warn");
+        toast(t("playtest.newBug", { n: r.n, name: r.name, grid: r.grid, text: r.text }), "warn", () => openReport(r.id));
         desktopNotify({ tag: "bug", title: t("playtest.newBug.title", { n: r.n, name: r.name }), body: t("playtest.newBug.body", { grid: r.grid, text: r.text }), action: "open" });
         if (isOpen() && !selected) selected = r.id;
       }
     }
     known = ids;
+    // The whitelist is on but the plugin that checks it doesn't answer: anyone can join. Said
+    // loud (the console has it too), once per server.
+    if (next.whitelistOpen && !view?.whitelistOpen) {
+      toast(t("serverlog.whitelistNotWorking"), "error", () => ctx.server.showConsole());
+      desktopNotify({ tag: "whitelist", title: t("settings.whitelist"), body: t("serverlog.whitelistNotWorking"), action: "" });
+    }
     apply(next);
   });
 

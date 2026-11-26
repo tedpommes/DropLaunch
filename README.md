@@ -150,3 +150,8 @@ The Rust server DropLaunch starts is Facepunch's own server and goes online like
 DropLaunch is free software under the [GNU General Public License v3.0](LICENSE) or (at your
 option) any later version. The libraries compiled into it keep their own licenses, listed in
 **About** (see [Third-party notices](docs/GUIDE.md#third-party-notices)).
+
+**Add-ons can use any license.** The [add-on exception](LICENSE) at the top of the license lets
+anyone make add-ons that work through DropLaunch's add-on API and share or sell them under terms
+of their own, closed-source and paid included. DropLaunch itself stays GPL. The add-on SDK and
+the guide for making add-ons in [`addons/`](addons) are MIT-licensed.

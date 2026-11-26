@@ -3,10 +3,11 @@
 // what was dropped on DropLaunch (by kind, to pick from), Rent a server and About. Language and
 // theme files can be dropped on the window or the exe too; switching languages reloads the window
 // (servers and SteamCMD keep going), switching themes doesn't.
-import { $, el, icon, invoke, toast, fmtWhen, confirmDialog, fitPath } from "./util.js";
+import { $, el, icon, invoke, toast, fmtWhen, confirmDialog, fitPath, pointAt, revealFile } from "./util.js";
 import { t, tn, language } from "./i18n.js";
 import { themes } from "./theme.js";
 import { rentPage } from "./rent.js";
+import { ADDON_GUIDE } from "./addons.js";
 
 const ADDED_KEY = "droplaunch.languageAdded";
 /** How long the page takes to slide away (the transition in styles.css). */
@@ -18,8 +19,10 @@ const TABS = [
   { id: "notifications", icon: "bell", tone: "orange", title: "settings.notifications", lead: "settings.notifications.lead" },
   { id: "guide", icon: "bulb", tone: "yellow", title: "settings.guide", lead: "settings.guide.lead" },
   { id: "assets", icon: "upload", tone: "pink", title: "settings.assets", lead: "settings.assets.lead" },
+  { id: "addons", icon: "puzzle", tone: "coral", title: "settings.addons", lead: "settings.addons.lead" },
   { id: "language", icon: "globe", tone: "violet", title: "settings.language", lead: "settings.language.lead" },
   { id: "visuals", icon: "palette", tone: "mint", title: "settings.visuals", lead: "settings.visuals.lead" },
+  { id: "advanced", icon: "sliders", tone: "green", title: "settings.advanced", lead: "settings.advanced.lead" },
   { id: "rent", icon: "cloud", tone: "cyan", title: "rent.title", lead: "rent.lead", apart: true },
   { id: "about", icon: "info", tone: "blue", title: "settings.about", lead: "settings.about.lead" },
 ];
@@ -78,6 +81,13 @@ export function initSettings(ctx) {
     b.whitelist = toggle(t("settings.whitelist"), t("settings.whitelist.note"), (on) => ctx.setOption({ whitelist: on }));
     b.whitelistBox = el("div", { class: "wl" });
     b.bugsNote = el("span", { class: "set-note" });
+    b.ignoredNote = el("span", { class: "set-note" });
+    b.ignoredRow = el(
+      "button",
+      { type: "button", class: "set-row set-action", id: "set-ignored", hidden: true, onclick: unignoreTesters },
+      el("span", { class: "set-text" }, el("span", { class: "set-title", text: t("settings.bugs.unignore") }), b.ignoredNote),
+      el("span", { class: "set-go" }, icon("refresh")),
+    );
     b.updateFramework = toggle(t("settings.updateFramework"), t("settings.updateFramework.note"), (on) => ctx.setOption({ updateFramework: on }));
     b.notifySaves = toggle(t("settings.notifySaves"), t("settings.notifySaves.note"), (on) => ctx.setOption({ notifySaves: on }));
     b.desktop = toggle(t("settings.desktop"), t("settings.desktop.note"), (on) => ctx.setOption({ desktopNotifications: on }));
@@ -90,8 +100,27 @@ export function initSettings(ctx) {
     b.assetKinds = el("div", { class: "asset-kinds", role: "tablist" });
     b.assetList = el("div", { class: "set-card asset-list" });
     b.assetNote = el("p", { class: "set-note asset-note" });
+    b.addonList = el("div", { class: "addon-list" });
+    // .dladdon files next to DropLaunch.exe or in the Add-ons folder, not added yet.
+    b.addonFoundGroup = group(t("settings.addons.found"));
+    b.addonFound = el("div", { class: "addon-list" });
+    b.addonFoundGroup.hidden = b.addonFound.hidden = true;
     const content = {
       assets: [b.assetKinds, b.assetList, b.assetNote],
+      addons: [
+        b.addonFoundGroup,
+        b.addonFound,
+        group(t("settings.addons.installed")),
+        b.addonList,
+        el("p", { class: "set-drop" }, icon("upload"), el("span", { text: t("settings.addons.drop") })),
+        group(t("settings.addons.more")),
+        card(
+          action(t("settings.addons.add"), t("settings.addons.add.note"), "plus", () => ctx.addons.pick(false).then(loadAddons)),
+          action(t("settings.addons.addFolder"), t("settings.addons.addFolder.note"), "folder-edit", () => ctx.addons.pick(true).then(loadAddons)),
+          action(t("settings.addons.folder"), t("settings.addons.folder.note"), "folder", () => openPath(ctx.addons.state.folder)),
+          action(t("settings.addons.guide"), t("settings.addons.guide.note"), "external", () => invoke("open_link", { url: ADDON_GUIDE }).catch((err) => toast(String(err), "error"))),
+        ),
+      ],
       language: [
         group(t("settings.language.pick")),
         b.languageTiles,
@@ -113,7 +142,9 @@ export function initSettings(ctx) {
         ),
       ],
       servers: [
-        card(b.autoJoin.node, b.cleanMaps.node, b.backupMaps.node, action(t("settings.backupMaps.folder"), t("settings.backupMaps.folder.note"), "folder", openBackups), b.updateFramework.node),
+        card(b.autoJoin.node, b.cleanMaps.node, b.backupMaps.node, action(t("settings.backupMaps.folder"), t("settings.backupMaps.folder.note"), "folder", openBackups)),
+        group(t("settings.serverUpdates")),
+        card(b.updateFramework.node, steamcmdBox(b)),
         group(t("settings.whitelist.group")),
         card(b.whitelist.node, b.whitelistBox),
         group(t("settings.bugs.group")),
@@ -124,8 +155,10 @@ export function initSettings(ctx) {
             el("span", { class: "set-text" }, el("span", { class: "set-title", text: t("settings.bugs.clear") }), b.bugsNote),
             el("span", { class: "set-go" }, icon("trash")),
           ),
+          b.ignoredRow,
         ),
       ],
+      advanced: advancedPage(b),
       notifications: [card(b.notifySaves.node, b.desktop.node)],
       guide: [
         card(b.tips.node),
@@ -205,7 +238,9 @@ export function initSettings(ctx) {
   function show(id, animate = true) {
     current = id;
     if (id === "assets") loadAssets();
+    if (id === "addons") loadAddons();
     if (id === "servers") loadBugCount();
+    if (id === "advanced") freshScripts();
     for (const tab of TABS) {
       const on = tab.id === id;
       built.tabs[tab.id].setAttribute("aria-selected", String(on));
@@ -219,6 +254,158 @@ export function initSettings(ctx) {
       }
     }
     body.scrollTop = 0;
+  }
+
+  // ---------------------------------------------------------------- add-ons (addons.js)
+  const openPath = (path) => invoke("open_folder", { path }).catch((err) => toast(String(err), "error"));
+  const small = (label, iconName, onclick, danger) =>
+    el("button", { type: "button", class: `btn btn-small ${danger ? "btn-danger" : "btn-ghost"}`, onclick }, icon(iconName), el("span", { text: label }));
+
+  async function loadAddons() {
+    if (!ctx.addons) return;
+    renderAddons(await ctx.addons.refresh());
+  }
+
+  function renderAddons(s) {
+    if (!built) return;
+    const found = [...(s.found ?? []).map(foundRow), ...(s.unreadable ?? []).map(unreadableRow)];
+    built.addonFound.replaceChildren(...found);
+    built.addonFoundGroup.hidden = built.addonFound.hidden = !found.length;
+    if (!s.addons.length) {
+      built.addonList.replaceChildren(el("div", { class: "set-card addon-empty" }, el("p", { class: "set-note", text: t("settings.addons.none") })));
+      return;
+    }
+    built.addonList.replaceChildren(...s.addons.map(addonRow));
+  }
+
+  function addonRow(a) {
+    const input = el("input", { type: "checkbox", role: "switch", "aria-label": t("settings.addons.on", { name: a.name }) });
+    input.checked = a.on;
+    input.disabled = Boolean(a.problem);
+    input.addEventListener("change", async () => {
+      try {
+        renderAddons(await ctx.addons.setOn(a.id, input.checked));
+      } catch (err) {
+        toast(String(err), "error");
+        input.checked = !input.checked;
+      }
+    });
+    const facts = [a.version && t("addons.version", { version: a.version }), a.author && t("addons.by", { author: a.author }), a.linked && t("settings.addons.linked")].filter(Boolean).join(" · ");
+    return el(
+      "div",
+      { class: `set-card addon-row${a.on ? "" : " off"}`, dataset: { addon: a.id } },
+      el(
+        "label",
+        { class: "addon-row-head" },
+        el("span", { class: "addon-row-icon" }, icon(a.ui[0]?.icon ?? "puzzle")),
+        el("span", { class: "set-text" }, el("span", { class: "set-title", text: a.name }), facts ? el("span", { class: "set-note", text: facts }) : null),
+        el("span", { class: "switch" }, input, el("span", { class: "switch-track", "aria-hidden": "true" })),
+      ),
+      a.problem ? el("p", { class: "addon-problem", text: a.problem }) : a.description ? el("p", { class: "set-note addon-desc", text: a.description }) : null,
+      a.permissions.length
+        ? el("div", { class: "addon-chips" }, a.permissions.map((p) => el("span", { class: "addon-chip", title: ctx.addons.permissionText(a, p), text: ctx.addons.permissionName(p) })))
+        : null,
+      // The sites it opens without asking (addon.json's links), as the add dialog showed them.
+      a.links?.length ? el("p", { class: "set-note addon-desc", text: t("addons.opens", { sites: a.links.join(", ") }) }) : null,
+      el(
+        "div",
+        { class: "addon-actions" },
+        a.on && a.ui.some((u) => u.kind === "tab")
+          ? small(t("settings.addons.open"), "arrow-right", () => {
+              close();
+              ctx.addons.show(a.id);
+            })
+          : null,
+        a.on
+          ? small(t("settings.addons.reload"), "refresh", () => {
+              ctx.addons.reload(a.id);
+              toast(t("settings.addons.reloaded", { name: a.name }));
+            })
+          : null,
+        small(t("settings.addons.folderOne"), "folder", () => openPath(a.folder)),
+        el("span", { class: "spacer" }),
+        small(t("settings.addons.remove"), "trash", async () => renderAddons(await ctx.addons.remove(a)), true),
+      ),
+    );
+  }
+
+  const fileName = (path) => path.split(/[\\/]/).pop();
+  const foundWhere = (f) => t("settings.addons.found.where", { file: fileName(f.path), where: t(f.place === "app" ? "settings.addons.found.app" : "settings.addons.found.folder") });
+
+  async function hideFound(f) {
+    try {
+      await invoke("addon_hide", { path: f.path });
+      toast(t("settings.addons.found.hidden", { file: fileName(f.path) }));
+    } catch (err) {
+      toast(String(err), "error");
+    }
+    loadAddons();
+  }
+
+  /** A .dladdon lying there: Add asks first (what it may do), like one dropped on DropLaunch. */
+  function foundRow(f) {
+    const facts = [f.version && t("addons.version", { version: f.version }), f.author && t("addons.by", { author: f.author })].filter(Boolean).join(" · ");
+    const add = el(
+      "button",
+      { type: "button", class: "btn btn-small btn-primary" },
+      icon(f.replaces ? "download" : "plus"),
+      el("span", { text: f.replaces ? t("settings.addons.found.update") : t("settings.addons.found.add") }),
+    );
+    add.addEventListener("click", async () => {
+      add.disabled = true;
+      try {
+        await ctx.addons.offer(f);
+      } finally {
+        add.disabled = false;
+        loadAddons();
+      }
+    });
+    return el(
+      "div",
+      { class: "set-card addon-row addon-found" },
+      el(
+        "div",
+        { class: "addon-row-head" },
+        el("span", { class: "addon-row-icon" }, icon(f.ui[0]?.icon ?? "puzzle")),
+        el("span", { class: "set-text" }, el("span", { class: "set-title", text: f.name }), facts ? el("span", { class: "set-note", text: facts }) : null),
+        f.replaces ? el("span", { class: "builtin-tag", text: t("settings.addons.found.updateTag", { from: f.replaces }) }) : null,
+      ),
+      f.description ? el("p", { class: "set-note addon-desc", text: f.description }) : null,
+      f.permissions.length
+        ? el("div", { class: "addon-chips" }, f.permissions.map((p) => el("span", { class: "addon-chip", title: ctx.addons.permissionText(f, p), text: ctx.addons.permissionName(p) })))
+        : null,
+      el("p", { class: "set-note addon-desc addon-file", text: foundWhere(f) }),
+      el(
+        "div",
+        { class: "addon-actions" },
+        add,
+        small(t("common.showExplorer"), "folder", () => reveal(f.path)),
+        el("span", { class: "spacer" }),
+        small(t("settings.addons.found.hide"), "x", () => hideFound(f)),
+      ),
+    );
+  }
+
+  /** A .dladdon there that can't be added: why, and Hide. */
+  function unreadableRow(f) {
+    return el(
+      "div",
+      { class: "set-card addon-row addon-found off" },
+      el(
+        "div",
+        { class: "addon-row-head" },
+        el("span", { class: "addon-row-icon" }, icon("puzzle")),
+        el("span", { class: "set-text" }, el("span", { class: "set-title", text: fileName(f.path) }), el("span", { class: "set-note", text: foundWhere(f) })),
+      ),
+      el("p", { class: "addon-problem", text: f.problem }),
+      el(
+        "div",
+        { class: "addon-actions" },
+        small(t("common.showExplorer"), "folder", () => reveal(f.path)),
+        el("span", { class: "spacer" }),
+        small(t("settings.addons.found.hide"), "x", () => hideFound(f)),
+      ),
+    );
   }
 
   // ---------------------------------------------------------------- dropped assets
@@ -326,7 +513,7 @@ export function initSettings(ctx) {
       ],
       cancel: false,
     });
-    if (!use) toast(t("settings.assets.start.kept", { name: f.name }));
+    if (!use) toast(t("settings.assets.start.kept", { name: f.name }), "", () => open("assets", { kind: "startFiles" }));
     else if (await useStartFile(f.usage, f.name)) toast(t("settings.assets.start.usedMaps", { name: f.name }), "ok");
   }
 
@@ -644,6 +831,8 @@ export function initSettings(ctx) {
     b.backupMaps.input.checked = Boolean(s.backupClientMaps);
     renderWhitelist();
     b.updateFramework.input.checked = s.updateFramework !== false;
+    renderSteamcmd();
+    renderAdvanced();
     b.notifySaves.input.checked = s.notifySaves !== false;
     b.desktop.input.checked = s.desktopNotifications !== false;
     b.version.textContent = [t("about.version", { version: s.version }), t("about.madeBy")].join(" · ");
@@ -664,6 +853,19 @@ export function initSettings(ctx) {
     if (!built) return;
     const kept = !bugCount ? "" : bugCount.reports ? tn("settings.bugs.count", bugCount.reports, { maps: tn("settings.bugs.maps", bugCount.maps) }) : t("settings.bugs.none");
     built.bugsNote.textContent = [kept, t("settings.bugs.note")].filter(Boolean).join(" ");
+    built.ignoredRow.hidden = !bugCount?.ignored;
+    built.ignoredNote.textContent = bugCount?.ignored ? tn("settings.bugs.ignored", bugCount.ignored) : "";
+  }
+
+  /** "Delete and ignore" on reports: those testers' reports are taken again. */
+  async function unignoreTesters() {
+    try {
+      const n = await invoke("bug_reports_unignore");
+      toast(tn("settings.bugs.unignored", n), "ok");
+    } catch (err) {
+      toast(String(err), "error");
+    }
+    loadBugCount();
   }
 
   /** Every map's bug reports put aside, numbering from #1 again (asks first). */
@@ -772,14 +974,317 @@ export function initSettings(ctx) {
     invoke("open_folder", { path: ctx.state.mapBackupsDir }).catch(() => toast(t("settings.backupMaps.none")));
   }
 
+  // ---------------------------------------------------------------- the SteamCMD update command
+  /** The command SteamCMD downloads and updates the server files with (here and in the update
+   *  .bat files): a box to change it, Save, and DropLaunch's own back. Built once in build(). */
+  function steamcmdBox(b) {
+    const input = el("textarea", {
+      class: "text-input cmd-input",
+      rows: "3",
+      spellcheck: "false",
+      autocomplete: "off",
+      "aria-label": t("settings.steamcmd.label"),
+    });
+    const tag = el("span", { class: "cmd-tag" });
+    const save = el("button", { type: "button", class: "btn btn-small btn-primary", onclick: () => store(input.value) }, el("span", { text: t("settings.steamcmd.save") }));
+    const reset = el("button", { type: "button", class: "btn btn-small btn-ghost", onclick: () => store("") }, el("span", { text: t("settings.steamcmd.reset") }));
+    async function store(text) {
+      const own = text.trim() && text.trim() !== ctx.state.steamcmdUpdateDefault;
+      const ok = await ctx.setOption({ steamcmdUpdate: text });
+      input.classList.toggle("bad", !ok);
+      if (!ok) return input.focus();
+      input.value = ctx.state.steamcmdUpdate;
+      renderSteamcmd();
+      toast(own ? t("settings.steamcmd.saved") : t("settings.steamcmd.resetDone"), "ok");
+    }
+    // Enter saves (the box only wraps the one line). What isn't saved is gone when Settings opens again.
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        store(input.value);
+      }
+    });
+    input.addEventListener("input", () => (input.classList.remove("bad"), renderSteamcmd()));
+    b.steamcmd = { input, tag, save, reset };
+    return el(
+      "div",
+      { class: "cmd" },
+      el("div", { class: "cmd-head" }, text(t("settings.steamcmd"), t("settings.steamcmd.note")), tag),
+      el("div", { class: "cmd-line" }, el("code", { class: "cmd-exe", text: `steamcmd.exe` }), input),
+      el("div", { class: "cmd-actions" }, el("span", { class: "set-note", text: t("settings.steamcmd.hint") }), reset, save),
+    );
+  }
+
+  function renderSteamcmd() {
+    const s = ctx.state;
+    const { input, tag, save, reset } = built.steamcmd;
+    if (!s?.steamcmdUpdate) return;
+    // Not while it's being changed.
+    if (document.activeElement !== input) {
+      input.value = s.steamcmdUpdate;
+      input.classList.remove("bad");
+    }
+    const own = s.steamcmdUpdate !== s.steamcmdUpdateDefault;
+    tag.textContent = own ? t("settings.steamcmd.own") : t("settings.steamcmd.default");
+    tag.classList.toggle("own", own);
+    save.disabled = input.value.trim() === s.steamcmdUpdate;
+    reset.hidden = !own && input.value.trim() === s.steamcmdUpdateDefault;
+  }
+
+  // ---------------------------------------------------------------- Settings › Advanced
+  /** What keeps DropLaunch working when something it relies on changes: download links, the log
+   *  texts it waits for, start arguments for every server, one more watched folder, the plugin
+   *  you changed, your own scripts. Built once in build(). */
+  function advancedPage(b) {
+    const box = (spec) => valueBox(spec);
+    b.advanced = {
+      links: [
+        box({ id: "steamcmdUrl", title: t("settings.advanced.steamcmdUrl"), note: t("settings.advanced.steamcmdUrl.note") }),
+        box({ id: "carbonUrl", title: t("settings.advanced.carbonUrl"), note: t("settings.advanced.carbonUrl.note") }),
+        box({ id: "oxideUrl", title: t("settings.advanced.oxideUrl"), note: t("settings.advanced.oxideUrl.note") }),
+        box({ id: "rusteditUrl", title: t("settings.advanced.rusteditUrl"), note: t("settings.advanced.rusteditUrl.note") }),
+      ],
+      texts: [
+        box({ id: "readyText", title: t("settings.advanced.readyText"), note: t("settings.advanced.readyText.note") }),
+        box({ id: "rconText", title: t("settings.advanced.rconText"), note: t("settings.advanced.rconText.note") }),
+      ],
+      args: box({ id: "startArgs", title: t("settings.advanced.startArgs"), note: t("settings.advanced.startArgs.note"), placeholder: `+rustedit.key "your key"`, hint: t("settings.advanced.startArgs.hint") }),
+      watchNote: el("span", { class: "set-note path-note" }),
+      watchClear: action(t("settings.advanced.watch.clear"), t("settings.advanced.watch.clear.note"), "x", () => setWatchDir("")),
+      pluginNote: el("span", { class: "set-note" }),
+      beforeNote: el("span", { class: "set-note" }),
+      afterNote: el("span", { class: "set-note" }),
+      beforeActs: el("span", { class: "set-acts" }),
+      afterActs: el("span", { class: "set-acts" }),
+    };
+    const a = b.advanced;
+    a.pluginRow = el(
+      "button",
+      { type: "button", class: "set-row set-action", onclick: restorePlugin },
+      el("span", { class: "set-text" }, el("span", { class: "set-title", text: t("settings.advanced.plugin") }), a.pluginNote),
+      el("span", { class: "set-go" }, icon("refresh")),
+    );
+    const info = (title, note, acts) => el("div", { class: "set-row" }, el("span", { class: "set-text" }, el("span", { class: "set-title", text: title }), note), acts);
+    return [
+      el("p", { class: "set-lead-note", text: t("settings.advanced.intro") }),
+      group(t("settings.advanced.links")),
+      card(...a.links.map((x) => x.node)),
+      group(t("settings.advanced.log")),
+      card(...a.texts.map((x) => x.node)),
+      group(t("settings.advanced.args")),
+      card(a.args.node),
+      group(t("settings.advanced.watch.group")),
+      card(
+        el(
+          "button",
+          { type: "button", class: "set-row set-action", onclick: pickWatchDir },
+          el("span", { class: "set-text" }, el("span", { class: "set-title", text: t("settings.advanced.watch") }), a.watchNote),
+          el("span", { class: "set-go" }, icon("folder-edit")),
+        ),
+        a.watchClear,
+      ),
+      group(t("settings.advanced.scripts")),
+      card(
+        a.pluginRow,
+        info(t("settings.advanced.beforeStart", { file: ctx.state?.hooks?.beforeStart ?? `before_start.bat` }), a.beforeNote, a.beforeActs),
+        info(t("settings.advanced.afterUpdate", { file: ctx.state?.hooks?.afterUpdate ?? `after_update.bat` }), a.afterNote, a.afterActs),
+        action(t("settings.advanced.serverFolder"), t("settings.advanced.serverFolder.note"), "folder", openServerFolder),
+      ),
+    ];
+  }
+
+  /** A value of Settings › Advanced (`id`: its name in the settings): a box to change it, Save,
+   *  and DropLaunch's own back. What DropLaunch uses when it isn't set shows in the box. */
+  function valueBox({ id, title, note, placeholder = "", hint = "" }) {
+    const input = el("input", { type: "text", class: "text-input cmd-input", spellcheck: "false", autocomplete: "off", placeholder, "aria-label": title });
+    const tag = el("span", { class: "cmd-tag" });
+    const fallback = () => ctx.state?.advancedDefaults?.[id] ?? "";
+    const own = () => ctx.state?.advanced?.[id] ?? "";
+    const shown = () => own() || fallback();
+    const save = el("button", { type: "button", class: "btn btn-small btn-primary", onclick: () => store(input.value) }, el("span", { text: t("settings.steamcmd.save") }));
+    const reset = el("button", { type: "button", class: "btn btn-small btn-ghost", onclick: () => store("") });
+    async function store(value) {
+      const ok = await ctx.setOption({ advanced: { [id]: value } });
+      input.classList.toggle("bad", !ok);
+      if (!ok) return input.focus();
+      input.value = shown();
+      render();
+      toast(own() ? t("settings.advanced.saved") : fallback() ? t("settings.advanced.resetDone") : t("settings.advanced.cleared"), "ok");
+    }
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        store(input.value);
+      }
+    });
+    input.addEventListener("input", () => (input.classList.remove("bad"), render()));
+    function render() {
+      if (!ctx.state) return;
+      // Not while it's being changed.
+      if (document.activeElement !== input) {
+        input.value = shown();
+        input.classList.remove("bad");
+      }
+      const mine = Boolean(own());
+      tag.hidden = !mine && !fallback();
+      tag.textContent = mine ? t("settings.steamcmd.own") : t("settings.steamcmd.default");
+      tag.classList.toggle("own", mine);
+      save.disabled = input.value.trim() === shown();
+      reset.replaceChildren(el("span", { text: fallback() ? t("settings.steamcmd.reset") : t("settings.advanced.clear") }));
+      reset.hidden = !mine;
+    }
+    const node = el(
+      "div",
+      { class: "cmd" },
+      el("div", { class: "cmd-head" }, text(title, note), tag),
+      el("div", { class: "cmd-line" }, input),
+      el("div", { class: "cmd-actions" }, el("span", { class: "set-note", text: hint }), reset, save),
+    );
+    return { node, render };
+  }
+
+  function renderAdvanced() {
+    const s = ctx.state;
+    const a = built.advanced;
+    if (!s || !a) return;
+    for (const x of [...a.links, ...a.texts, a.args]) x.render();
+    a.watchNote.textContent = s.watchDir ?? t("settings.advanced.watch.none");
+    a.watchNote.title = s.watchDir ?? "";
+    a.watchClear.hidden = !s.watchDir;
+    a.pluginRow.disabled = !s.pluginEdited;
+    a.pluginNote.textContent = s.pluginEdited ? t("settings.advanced.plugin.edited") : t("settings.advanced.plugin.note");
+    const h = s.hooks ?? {};
+    renderScript(h.beforeStart, h.hasBeforeStart, h.beforeStartStatus, t("settings.advanced.beforeStart.note"), a.beforeNote, a.beforeActs);
+    renderScript(h.afterUpdate, h.hasAfterUpdate, h.afterUpdateStatus, t("settings.advanced.afterUpdate.note"), a.afterNote, a.afterActs);
+  }
+
+  /** One of your scripts: there or not, OK'd as it is or not (hookscript.rs), its last run, and
+   *  OK it or Run now. */
+  function renderScript(name, there, status, what, note, acts) {
+    const parts = [what, there ? t("settings.advanced.script.found") : t("settings.advanced.script.none")];
+    if (there && status?.trust === "new") parts.push(t("settings.advanced.script.new"));
+    else if (there && status?.trust === "changed") parts.push(t("settings.advanced.script.changed"));
+    const last = there ? status?.last : null;
+    if (last) parts.push(t("settings.advanced.script.lastRun", { when: fmtWhen(last.at / 1000), result: runResult(last), lines: last.lines }));
+    note.textContent = parts.join(" ");
+    const ok = there && status && status.trust !== "ok";
+    acts.replaceChildren(
+      ...(!there || !status
+        ? []
+        : ok
+          ? [el("button", { type: "button", class: "btn btn-small btn-ghost", onclick: () => okScript(name, status.trust === "changed") }, el("span", { text: t("settings.advanced.script.ok") }))]
+          : [el("button", { type: "button", class: "btn btn-small btn-ghost", onclick: (e) => runScript(name, e.currentTarget) }, icon("play"), el("span", { text: t("settings.advanced.script.run") }))]),
+    );
+  }
+
+  /** Your scripts as they are on the disk now (one may have been put there or edited since). */
+  function freshScripts() {
+    ctx.refresh().then(renderAdvanced, () => {});
+  }
+
+  /** How a script's run ended, in words. */
+  function runResult(ran) {
+    if (ran.timedOut) return t("settings.advanced.script.lastTimedOut");
+    if (ran.code == null) return t("settings.advanced.script.lastEnded");
+    return ran.code === 0 ? t("settings.advanced.script.lastOk") : t("settings.advanced.script.lastCode", { code: ran.code });
+  }
+
+  /** The script in the active server folder, as it is now, may run (asked first). */
+  async function okScript(name, changed) {
+    const dir = ctx.state?.folders?.find((f) => f.key === "server")?.path;
+    const path = dir ? `${dir.replace(/[\\/]+$/, "")}\\${name}` : name;
+    const choice = await confirmDialog({
+      title: t("settings.advanced.script.okTitle", { name }),
+      text: [el("p", { text: t(changed ? "maps.script.textChanged" : "maps.script.text") }), el("p", { class: "path", text: path })],
+      choices: [
+        { label: t("maps.script.show"), value: "show" },
+        { label: t("settings.advanced.script.ok"), value: "ok", danger: true },
+      ],
+    });
+    if (choice === "show") return invoke("reveal", { path }).catch((err) => toast(String(err), "error"));
+    if (choice !== "ok") return;
+    try {
+      await invoke("hook_approve", { name });
+    } catch (err) {
+      return toast(String(err), "error");
+    }
+    await ctx.refresh();
+    renderAdvanced();
+  }
+
+  /** Run now: the script, with what it printed. */
+  async function runScript(name, button) {
+    button.disabled = true;
+    let ran;
+    try {
+      ran = await invoke("hook_run", { name });
+    } catch (err) {
+      toast(String(err), "error");
+      return;
+    } finally {
+      button.disabled = false;
+      await ctx.refresh();
+      renderAdvanced();
+    }
+    await confirmDialog({
+      title: t("settings.advanced.script.ran", { name, result: runResult(ran) }),
+      text: ran.lines.length ? el("pre", { class: "hook-output", text: ran.lines.join("\n") }) : t("settings.advanced.script.noOutput"),
+      ok: t("common.close"),
+      cancel: false,
+    });
+  }
+
+  async function pickWatchDir() {
+    const path = await invoke("pick_folder", { title: t("settings.advanced.watch.pick"), start: ctx.state?.watchDir ?? null }).catch((err) => (toast(String(err), "error"), null));
+    if (path) await setWatchDir(path);
+  }
+
+  async function setWatchDir(path) {
+    if (!(await ctx.setOption({ advanced: { watchDir: path } }))) return;
+    ctx.maps?.reload();
+    toast(path ? t("settings.advanced.watch.set", { dir: ctx.state.watchDir ?? path }) : t("settings.advanced.watch.cleared"), "ok");
+  }
+
+  async function restorePlugin() {
+    const ok = await confirmDialog({
+      title: t("settings.advanced.plugin.restore.title"),
+      text: t("settings.advanced.plugin.restore.text"),
+      choices: [{ label: t("settings.advanced.plugin.restore.ok"), value: true, danger: true }],
+    });
+    if (!ok) return;
+    try {
+      await invoke("restore_plugin");
+    } catch (err) {
+      toast(String(err), "error");
+      return;
+    }
+    await ctx.refresh();
+    toast(t("settings.advanced.plugin.restored"), "ok");
+  }
+
+  function openServerFolder() {
+    const dir = ctx.state?.folders?.find((f) => f.key === "server")?.path;
+    if (dir) invoke("open_folder", { path: dir }).catch((err) => toast(String(err), "error"));
+  }
+
   // ---------------------------------------------------------------- open, close
-  /** `tab`: the one to show (else the last one). */
-  async function open(tab) {
+  /**
+   * `tab`: the one to show (else the last one). `kind`: Dropped assets' kind to show; `point`: a
+   * selector in the page to point at once it's there (where a toast led).
+   */
+  async function open(tab, { kind, point } = {}) {
     if (!built) build();
+    if (kind && ASSET_KINDS.some((k) => k.id === kind)) {
+      assetKind = kind;
+      if (assets) renderAssets();
+    }
     if (tab && built.tabs[tab]) show(tab, false);
+    if (point) pointAt(() => page.querySelector(point));
     refresh();
     if (current === "assets") loadAssets();
+    if (current === "addons") loadAddons();
     if (current === "servers") loadBugCount();
+    if (current === "advanced") freshScripts();
     clearTimeout(hideTimer);
     page.hidden = false;
     // Laid out above the window first, so it slides down.
@@ -833,11 +1338,18 @@ export function initSettings(ctx) {
     const added = reply.added.at(-1);
     if (!added) return;
     if (!use) {
-      toast(t("settings.language.addedOnly", { name: added.name }), "ok");
+      toast(t("settings.language.addedOnly", { name: added.name }), "ok", () => open("language"));
       return;
     }
     if (ctx.busy?.()) {
-      toast(t("settings.language.addedLater", { name: added.name }), "ok");
+      toast(t("settings.language.addedLater", { name: added.name }), "ok", () => open("language"));
+      return;
+    }
+    // Asked in the language that's in use: a file someone else made words every button from then
+    // on (Remove, Cancel…), so it's only switched to when the user says so.
+    const now = await confirmDialog({ title: t("settings.language.useNow", { name: added.name }), text: t("settings.language.useNowText"), ok: t("settings.language.useNowButton") });
+    if (!now) {
+      toast(t("settings.language.addedOnly", { name: added.name }), "ok", () => open("language"));
       return;
     }
     try {
@@ -877,7 +1389,7 @@ export function initSettings(ctx) {
       try {
         await themes.reload();
         if (use) await themes.use(added.id);
-        toast(t(use ? "settings.visuals.added" : "settings.visuals.addedOnly", { name: added.name }), "ok");
+        toast(t(use ? "settings.visuals.added" : "settings.visuals.addedOnly", { name: added.name }), "ok", () => open("visuals"));
       } catch (err) {
         toast(String(err), "error");
       }
@@ -900,7 +1412,7 @@ export function initSettings(ctx) {
   async function saveTheme() {
     try {
       const path = await invoke("save_theme", { id: themes.id });
-      if (path) toast(t("settings.visuals.saved", { path }), "ok");
+      if (path) toast(t("settings.visuals.saved", { path }), "ok", () => revealFile(path));
     } catch (err) {
       toast(String(err), "error");
     }
@@ -925,7 +1437,7 @@ export function initSettings(ctx) {
   async function exportEnglish() {
     try {
       const path = await invoke("export_language");
-      if (path) toast(t("settings.language.exported", { path }), "ok");
+      if (path) toast(t("settings.language.exported", { path }), "ok", () => revealFile(path));
     } catch (err) {
       toast(String(err), "error");
     }
@@ -962,7 +1474,7 @@ export function initSettings(ctx) {
     const name = sessionStorage.getItem(ADDED_KEY);
     if (name) {
       sessionStorage.removeItem(ADDED_KEY);
-      setTimeout(() => toast(t("settings.language.added", { name }), "ok"), 400);
+      setTimeout(() => toast(t("settings.language.added", { name }), "ok", () => open("language")), 400);
     }
   } catch {
     /* no session storage: no note */

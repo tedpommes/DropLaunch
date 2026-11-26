@@ -1,8 +1,11 @@
 //! A small Rust WebRCON client on its own thread: ws://127.0.0.1:<port>/<password>, JSON
 //! `{Identifier, Message, Name}` out, `{Identifier, Message, Type}` back. It reconnects until
 //! dropped. Broadcast log lines (Identifier <= 0) are ignored: the log file already has them.
+//! Except chat (Type "Chat"): the server sends it as data (who, which channel, what), which a
+//! player can't fake by typing something that looks like a log line.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::io::ErrorKind;
 use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,6 +18,76 @@ pub enum Event {
     Connected,
     Disconnected(String),
     Reply { id: i32, text: String },
+    Chat(Chat),
+}
+
+/// A chat message, as the server sent it over RCON.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Chat {
+    pub name: String,
+    pub steam_id: String,
+    pub text: String,
+    /// global | team | server | cards | local | clan | other
+    pub channel: &'static str,
+    /// Milliseconds since 1970.
+    pub time: i64,
+}
+
+/// Rust's chat entry (`{Channel, Message, UserId, Username, Color, Time}`), checked: no control
+/// characters, a Steam ID of digits, a known channel, limited lengths. None: not one.
+pub fn parse_chat(message: &str) -> Option<Chat> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "PascalCase")]
+    struct Entry {
+        #[serde(default)]
+        channel: Value,
+        #[serde(default)]
+        message: String,
+        #[serde(default)]
+        user_id: Value,
+        #[serde(default)]
+        username: String,
+        #[serde(default)]
+        time: i64,
+    }
+    let entry: Entry = serde_json::from_str(message.trim()).ok()?;
+    let channel = match &entry.channel {
+        Value::Number(n) => match n.as_i64() {
+            Some(0) => "global",
+            Some(1) => "team",
+            Some(2) => "server",
+            Some(3) => "cards",
+            Some(4) => "local",
+            Some(5) => "clan",
+            _ => "other",
+        },
+        Value::String(s) => match s.to_ascii_lowercase().as_str() {
+            "global" => "global",
+            "team" => "team",
+            "server" => "server",
+            "cards" => "cards",
+            "local" => "local",
+            "clan" => "clan",
+            _ => "other",
+        },
+        _ => "other",
+    };
+    let steam_id: String = match &entry.user_id {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    };
+    let steam_id = if !steam_id.is_empty() && steam_id.len() <= 20 && steam_id.bytes().all(|b| b.is_ascii_digit()) { steam_id } else { String::new() };
+    let plain = |text: &str, max: usize| -> String { text.chars().map(|c| if c.is_control() { ' ' } else { c }).take(max).collect::<String>().trim().to_string() };
+    let text = plain(&entry.message, 500);
+    if text.is_empty() {
+        return None;
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
+    // Seconds since 1970 (a time from before 2015 or in the future: now).
+    let time = Some(entry.time.saturating_mul(1000)).filter(|&t| t > 1_420_000_000_000 && t < now + 86_400_000).unwrap_or(now);
+    Some(Chat { name: plain(&entry.username, 64), steam_id, text, channel, time })
 }
 
 pub struct Client {
@@ -73,6 +146,8 @@ struct Incoming {
     identifier: i32,
     #[serde(rename = "Message", default)]
     message: String,
+    #[serde(rename = "Type", default)]
+    kind: String,
 }
 
 fn run(port: u16, password: &str, commands: &Receiver<(i32, String)>, events: &Sender<Event>, stop: &AtomicBool) {
@@ -137,6 +212,10 @@ fn session(
                 if let Ok(msg) = serde_json::from_str::<Incoming>(text.as_str()) {
                     if msg.identifier > 0 {
                         let _ = events.send(Event::Reply { id: msg.identifier, text: msg.message });
+                    } else if msg.kind == "Chat" {
+                        if let Some(chat) = parse_chat(&msg.message) {
+                            let _ = events.send(Event::Chat(chat));
+                        }
                     }
                 }
             }
@@ -185,5 +264,24 @@ mod tests {
     #[test]
     fn passwords_are_url_safe() {
         assert_eq!(super::encode("ab C/d%"), "ab%20C%2Fd%25");
+    }
+
+    /// Rust's chat entry becomes a message with a known channel, a Steam ID of digits and no
+    /// control characters; anything else isn't one.
+    #[test]
+    fn chat_comes_from_the_servers_own_data() {
+        let chat = super::parse_chat(r##"{"Channel":1,"Message":"hi\nthere","UserId":"76561198000000001","Username":"Ann","Color":"#5af","Time":1763380000}"##).unwrap();
+        assert_eq!(chat.channel, "team");
+        assert_eq!(chat.steam_id, "76561198000000001");
+        assert_eq!(chat.name, "Ann");
+        assert_eq!(chat.text, "hi there");
+        assert_eq!(chat.time, 1_763_380_000_000);
+        // A number for the id, a name for the channel, no time: still read.
+        let chat = super::parse_chat(r#"{"Channel":"Global","Message":"gg","UserId":76561198000000002,"Username":"Bob"}"#).unwrap();
+        assert_eq!((chat.channel, chat.steam_id.as_str()), ("global", "76561198000000002"));
+        // An id that isn't one is left out; an empty message or a log line isn't chat.
+        assert_eq!(super::parse_chat(r#"{"Channel":0,"Message":"x","UserId":"7656 OR 1","Username":"C"}"#).unwrap().steam_id, "");
+        assert!(super::parse_chat(r#"{"Channel":0,"Message":"  ","UserId":"1"}"#).is_none());
+        assert!(super::parse_chat("[CHAT] Bob[76561198000000002] : hi").is_none());
     }
 }

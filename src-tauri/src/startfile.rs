@@ -19,6 +19,9 @@ use std::hash::{BuildHasher, Hasher};
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
 
+#[cfg(windows)]
+use crate::advanced::Link;
+use crate::steamcmd::command::UpdateCommand;
 use crate::steamcmd::{install, RUST_SERVER_APP_ID};
 
 #[cfg(windows)]
@@ -53,6 +56,9 @@ const MAX_SCRIPT: u64 = 256 * 1024;
 /// In a file that takes the settings of one of yours: `rem Uses the settings of <file>, your start file.`
 const CHOSEN_MARK: &str = "Uses the settings of";
 const CHOSEN_END: &str = ", your start file.";
+/// In a file with Settings › Advanced's start arguments, with a hash of them (a file without one,
+/// or with another one, is written again).
+const ADVANCED_MARK: &str = "Also uses the start arguments from DropLaunch's Settings > Advanced (";
 
 /// What a start file runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +101,8 @@ pub struct StartFile {
     pub current_template: bool,
     /// The start file of yours it took its settings from (its name).
     pub chosen: Option<String>,
+    /// The hash of Settings › Advanced's start arguments it has (None: it has none).
+    pub advanced_args: Option<String>,
 }
 
 impl StartFile {
@@ -320,10 +328,14 @@ const MANAGED_ARGS: [&str; 15] = [
 /// these have the same settings.
 const MAP_ARGS: [&str; 5] = ["server.levelurl", "server.identity", "server.hostname", "server.description", "rcon.password"];
 
-/// Every `+name value` argument in a start file, in order.
-pub fn args_of(text: &str) -> Vec<(String, String)> {
+fn arg_regex() -> &'static Regex {
     static ARG: OnceLock<Regex> = OnceLock::new();
     re(&ARG, r#"(?:^|\s)\+([A-Za-z][A-Za-z0-9_.]*)[ \t]+(?:"([^"\r\n]*)"|([^\s"^]+))"#)
+}
+
+/// Every `+name value` argument in a start file, in order.
+pub fn args_of(text: &str) -> Vec<(String, String)> {
+    arg_regex()
         .captures_iter(text)
         .filter_map(|c| {
             let name = c.get(1)?.as_str().to_ascii_lowercase();
@@ -359,12 +371,47 @@ fn plain_value(value: &str) -> bool {
     value.len() <= 200 && !value.chars().any(|c| matches!(c, '"' | '%' | '$' | '`' | '^' | '&' | '|' | '<' | '>' | '\r' | '\n' | '!'))
 }
 
+/// Console commands that say who's an admin, throw players out or end the server. Rust runs every
+/// `+word value` of its command line as a console command, so `+ownerid <id>` in a start file
+/// makes that player the server's owner: these are never settings.
+const ADMIN_COMMANDS: [&str; 11] = ["ownerid", "moderatorid", "removeowner", "removemoderator", "ban", "banid", "unban", "kick", "kickall", "quit", "restart"];
+
+/// What no start file from outside brings, one of yours included (it may be someone else's that
+/// you dropped): who's an admin, where the server loads code from (Oxide reads
+/// `+oxide.directory`, and its plugins are code that runs on this PC), or a folder on the network.
+fn never_from_a_file(name: &str, value: &str) -> bool {
+    let command = name.strip_prefix("global.").unwrap_or(name);
+    ADMIN_COMMANDS.contains(&command) || name == "oxide.directory" || name.starts_with("harmony.") || value.starts_with("\\\\") || value.starts_with("//")
+}
+
+/// Groups a start file that came with a map can't set: console commands (`global.`), Carbon and
+/// Oxide, Harmony mods, the Rust+ app's address and RCON.
+const NOT_FROM_A_MAP_GROUPS: [&str; 8] = ["global.", "oxide.", "o.", "carbon.", "c.", "harmony.", "app.", "rcon."];
+/// ...and these: the address the server listens on, EAC and encryption, and the web addresses
+/// every joining game fetches (they'd tell a website who your testers are).
+const NOT_FROM_A_MAP: [&str; 9] =
+    ["server.ip", "server.secure", "server.encryption", "server.eac", "server.url", "server.headerimage", "server.logoimage", "server.official", "server.stats"];
+
+/// A setting the start file that came with a map may bring. It's used without asking, and the
+/// .zip may be a stranger's: how the game plays (decay, PvE, max players…), never who runs the
+/// server, what it loads, or a web address or path.
+fn map_setting(name: &str, value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let drive_path = bytes.len() > 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'\\' | b'/');
+    name.contains('.')
+        && !never_from_a_file(name, value)
+        && !NOT_FROM_A_MAP_GROUPS.iter().any(|group| name.starts_with(group))
+        && !NOT_FROM_A_MAP.contains(&name)
+        && !value.contains("://")
+        && !drive_path
+}
+
 /// The start file next to `map` that isn't DropLaunch's own: one named after the map, else the
-/// only one there. Its arguments DropLaunch doesn't set itself, and only plain ones.
-pub fn bundled(map: &Path) -> Option<Bundled> {
+/// only one there. Its path and text.
+fn bundled_file(map: &Path) -> Option<(PathBuf, String)> {
     let dir = map.parent()?;
     let stem = map_title(map).to_ascii_lowercase();
-    let candidates: Vec<(PathBuf, String)> = std::fs::read_dir(dir)
+    let mut candidates: Vec<(PathBuf, String)> = std::fs::read_dir(dir)
         .ok()?
         .flatten()
         .map(|e| e.path())
@@ -373,17 +420,39 @@ pub fn bundled(map: &Path) -> Option<Bundled> {
         .filter_map(|p| std::fs::read_to_string(&p).ok().map(|text| (p, text)))
         .filter(|(_, text)| text.contains("RustDedicated") && !text.contains(TEMPLATE_MARK))
         .collect();
-    let named = candidates.iter().find(|(p, _)| map_title(p).to_ascii_lowercase().contains(&stem));
-    let (path, text) = named.or_else(|| (candidates.len() == 1).then(|| &candidates[0]))?;
+    let named = candidates.iter().position(|(p, _)| map_title(p).to_ascii_lowercase().contains(&stem));
+    let at = named.or((candidates.len() == 1).then_some(0))?;
+    Some(candidates.swap_remove(at))
+}
+
+/// The start file that came with `map` (`bundled_file`): its arguments DropLaunch doesn't set
+/// itself, only plain ones, and only settings a map may bring (`map_setting`).
+pub fn bundled(map: &Path) -> Option<Bundled> {
+    let (path, text) = bundled_file(map)?;
     let mut args: Vec<(String, String)> = Vec::new();
-    for (name, value) in args_of(text) {
-        if MANAGED_ARGS.contains(&name.as_str()) || !plain_value(&value) {
+    for (name, value) in args_of(&text) {
+        if MANAGED_ARGS.contains(&name.as_str()) || !plain_value(&value) || !map_setting(&name, &value) {
             continue;
         }
         args.retain(|(n, _)| *n != name);
         args.push((name, value));
     }
-    (!args.is_empty()).then(|| Bundled { path: path.clone(), args })
+    (!args.is_empty()).then_some(Bundled { path, args })
+}
+
+/// What the start file that came with `map` has that DropLaunch leaves out because a map can't
+/// bring it (`map_setting`): the file's name and those settings' names, for the console. None:
+/// nothing was left out.
+pub fn bundled_refused(map: &Path) -> Option<(String, Vec<String>)> {
+    let (path, text) = bundled_file(map)?;
+    let mut names: Vec<String> = Vec::new();
+    for (name, value) in args_of(&text) {
+        if !MANAGED_ARGS.contains(&name.as_str()) && plain_value(&value) && !map_setting(&name, &value) && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    let file = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    (!names.is_empty()).then_some((file, names))
 }
 
 /// What a start file of yours is for: custom maps (it loads a map with server.levelurl), or the
@@ -442,6 +511,12 @@ pub fn settings_for(text: &str, with_map: bool) -> Vec<(String, String)> {
     args
 }
 
+/// `settings_for` a start file that was dropped on DropLaunch: without what no file from outside
+/// brings (`never_from_a_file`: it may be someone else's start file).
+fn dropped_settings(text: &str, with_map: bool) -> Vec<(String, String)> {
+    settings_for(text, with_map).into_iter().filter(|(name, value)| !never_from_a_file(name, value)).collect()
+}
+
 /// A start file of yours, chosen for the procedural map or for custom maps (DropLaunch's own start
 /// files for those take its settings), or started from the map list.
 #[derive(Debug, Clone, PartialEq)]
@@ -455,14 +530,14 @@ impl Chosen {
     /// None: it's gone, or it isn't a start file for `usage`.
     pub fn read(path: &Path, usage: Use) -> Option<Self> {
         let text = read_script(path)?;
-        (use_of(&text)? == usage).then(|| Chosen { path: path.to_path_buf(), args: settings_for(&text, false) })
+        (use_of(&text)? == usage).then(|| Chosen { path: path.to_path_buf(), args: dropped_settings(&text, false) })
     }
 
     /// A procedural map's start file started from the map list: all its settings, its level, seed
     /// and size too.
     pub fn preset(path: &Path) -> Option<Self> {
         let text = read_script(path)?;
-        (use_of(&text)? == Use::Procgen).then(|| Chosen { path: path.to_path_buf(), args: settings_for(&text, true) })
+        (use_of(&text)? == Use::Procgen).then(|| Chosen { path: path.to_path_buf(), args: dropped_settings(&text, true) })
     }
 
     /// The value of `+name` in its settings.
@@ -581,14 +656,57 @@ fn server_args(target: &Target, identity: &str, password: &str, prefab: bool, ex
 }
 
 /// The settings that go in besides DropLaunch's own: yours, then the map's own start file's
-/// (a map knows best what it needs).
+/// (a map knows best what it needs), then Settings › Advanced's start arguments (for every server).
 fn extras(chosen: Option<&Chosen>, bundled: Option<&Bundled>) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = chosen.map(|c| c.args.clone()).unwrap_or_default();
-    for (name, value) in bundled.map_or(&[][..], |b| &b.args[..]) {
+    let advanced = advanced_args();
+    for (name, value) in bundled.map_or(&[][..], |b| &b.args[..]).iter().chain(&advanced) {
         out.retain(|(n, _)| n != name);
         out.push((name.clone(), value.clone()));
     }
     out
+}
+
+/// Settings › Advanced's start arguments (checked when they were set; checked again, in case the
+/// settings file was edited by hand).
+fn advanced_args() -> Vec<(String, String)> {
+    let text = crate::advanced::start_args();
+    if check_start_args(&text).is_err() {
+        return Vec::new();
+    }
+    settings_for(&text, false)
+}
+
+/// The hash of Settings › Advanced's start arguments a start file is marked with (None: none set).
+fn advanced_mark() -> Option<String> {
+    let args = advanced_args();
+    let text: Vec<String> = args.iter().map(|(name, value)| format!("+{name} \"{value}\"")).collect();
+    (!args.is_empty()).then(|| format!("{:016x}", crate::advanced::hash(&text.join(" "))))
+}
+
+/// Settings › Advanced's start arguments: `+name value` only (in quotes when the value has a
+/// space), plain values, and none of those DropLaunch sets itself. Written back tidied up; empty:
+/// none.
+pub fn check_start_args(text: &str) -> Result<Option<String>, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    if text.len() > 1000 || text.contains(['\r', '\n']) || !arg_regex().replace_all(text, " ").trim().is_empty() {
+        return Err(crate::t!("advanced.error.args"));
+    }
+    let args = args_of(text);
+    if let Some((name, _)) = args.iter().find(|(n, _)| OWN_ARGS.contains(&n.as_str()) || PROCGEN_ARGS.contains(&n.as_str())) {
+        return Err(crate::t!("advanced.error.argOwn", name = format!("+{name}")));
+    }
+    if let Some((name, _)) = args.iter().find(|(_, v)| !plain_value(v)) {
+        return Err(crate::t!("advanced.error.argValue", name = format!("+{name}")));
+    }
+    let tidy: Vec<String> = args
+        .iter()
+        .map(|(name, value)| if value.is_empty() || value.contains(char::is_whitespace) { format!("+{name} \"{value}\"") } else { format!("+{name} {value}") })
+        .collect();
+    Ok(Some(tidy.join(" ")))
 }
 
 /// The value of `+name` in what server_args made.
@@ -660,6 +778,9 @@ fn contents(layout: &Layout, target: &Target, prefab: bool, password: &str, bund
         let file = b.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         lines.push(format!("rem Also uses the settings of {} (it came with the map).", bat_escape_bare(&file)));
     }
+    if let Some(mark) = advanced_mark() {
+        lines.push(format!("rem {ADVANCED_MARK}{mark})."));
+    }
     lines.push(format!("title DropLaunch - {title}{}", if prefab { " (prefab test mode)" } else { "" }));
     lines.push("cd /d \"%~dp0\"".into());
     if let Target::Map(map) = target {
@@ -723,6 +844,9 @@ fn contents(layout: &Layout, target: &Target, prefab: bool, password: &str, bund
     ];
     if let Some(c) = chosen {
         lines.push(format!("# {CHOSEN_MARK} {}{CHOSEN_END}", c.file_name()));
+    }
+    if let Some(mark) = advanced_mark() {
+        lines.push(format!("# {ADVANCED_MARK}{mark})."));
     }
     lines.push("HERE=\"$(cd \"$(dirname \"$0\")\" && pwd)\"".into());
     lines.push("cd \"$HERE\"".into());
@@ -791,11 +915,26 @@ pub fn ensure(layout: &Layout, target: &Target, prefab: bool, chosen: Option<&Ch
         Target::Procgen | Target::Preset(_) => None,
     };
     let chosen_name = chosen.map(|c| c.file_name().to_ascii_lowercase());
+    let advanced = advanced_mark();
+    // What an older DropLaunch took from the map's start file and this one leaves out (an owner,
+    // Oxide's folder…): a start file that still has one of those is written again, without it.
+    // (Not what a start file of yours or Settings › Advanced sets: those stay.)
+    let left_out: Vec<String> = match target {
+        Target::Map(map) => {
+            let yours = extras(chosen, None);
+            bundled_refused(map).map(|(_, names)| names).unwrap_or_default().into_iter().filter(|name| !yours.iter().any(|(n, _)| n == name)).collect()
+        }
+        Target::Procgen | Target::Preset(_) => Vec::new(),
+    };
+    let has_left_out = |sf: &StartFile| !left_out.is_empty() && read_script(&sf.path).is_some_and(|text| args_of(&text).iter().any(|(name, _)| left_out.contains(name)));
     let stale = |sf: &StartFile| {
         needs_rewrite(sf, target)
             || bundled.as_ref().is_some_and(|b| older_than(&sf.path, &b.path))
+            || has_left_out(sf)
             // Another start file of yours was chosen (or none any more), or yours is newer.
             || sf.chosen.as_ref().map(|n| n.to_ascii_lowercase()) != chosen_name
+            // Settings › Advanced's start arguments changed.
+            || sf.advanced_args != advanced
             || chosen.is_some_and(|c| older_than(&sf.path, &c.path))
     };
     let mut rewritten = false;
@@ -867,6 +1006,7 @@ pub fn parse(text: &str, path: &Path, dir: &Path) -> StartFile {
     static LOGFILE: OnceLock<Regex> = OnceLock::new();
     static EVENTS: OnceLock<Regex> = OnceLock::new();
     static CHOSEN: OnceLock<Regex> = OnceLock::new();
+    static ADVANCED: OnceLock<Regex> = OnceLock::new();
 
     let unescape = |s: &str| if cfg!(windows) { s.replace("%%", "%") } else { s.to_string() };
     let resolve = |s: &str| -> PathBuf {
@@ -902,6 +1042,9 @@ pub fn parse(text: &str, path: &Path, dir: &Path) -> StartFile {
         prefab_mode: arg_value(text, &EVENTS, "server.events").is_some_and(|v| v.eq_ignore_ascii_case("false") || v == "0"),
         current_template: text.contains(LAUNCH_ENV) && text.contains(TEMPLATE_MARK) && !text.contains(RETIRED_LEVELURL_ENV),
         chosen: re(&CHOSEN, &format!(r"(?m)^\s*(?:rem|#)\s+{CHOSEN_MARK} (.+?){}\s*$", regex::escape(CHOSEN_END)))
+            .captures(text)
+            .map(|c| c[1].to_string()),
+        advanced_args: re(&ADVANCED, &format!(r"(?m)^\s*(?:rem|#)\s+{}([0-9a-f]{{16}})\)", regex::escape(ADVANCED_MARK)))
             .captures(text)
             .map(|c| c[1].to_string()),
         map,
@@ -949,7 +1092,7 @@ fn write_changed(path: &Path, text: &str) -> std::io::Result<()> {
 /// SteamCMD, the way DropLaunch does (see update_routine). Rewritten when the branch or the
 /// update setting changes.
 #[cfg(windows)]
-pub fn write_update_script(layout: &Layout, branch: &str, update_framework: bool) -> std::io::Result<PathBuf> {
+pub fn write_update_script(layout: &Layout, branch: &str, update_framework: bool, command: &UpdateCommand) -> std::io::Result<PathBuf> {
     let steamcmd = script_path(layout, &install::executable(layout.steamcmd_dir));
     let branch = sanitize_branch(branch);
     let mut lines: Vec<String> = vec![
@@ -962,7 +1105,7 @@ pub fn write_update_script(layout: &Layout, branch: &str, update_framework: bool
     ];
     lines.extend(update_head(&steamcmd, update_framework));
     lines.push(format!("set \"DIR=%~dp0.\" & set \"BRANCH={branch}\" & call :update"));
-    lines.extend(update_routine());
+    lines.extend(update_routine(command));
     let path = layout.server_dir.join(UPDATE_SCRIPT);
     write_changed(&path, &finish_bat(lines))?;
     Ok(path)
@@ -971,7 +1114,13 @@ pub fn write_update_script(layout: &Layout, branch: &str, update_framework: bool
 /// `update_rust_server.bat` in the SteamCMD folder: updates every server folder (`servers`, each
 /// with its branch) the way DropLaunch does, so the servers can be updated without starting it.
 #[cfg(windows)]
-pub fn write_steamcmd_update_script(base: &Path, steamcmd_dir: &Path, servers: &[(PathBuf, String)], update_framework: bool) -> std::io::Result<PathBuf> {
+pub fn write_steamcmd_update_script(
+    base: &Path,
+    steamcmd_dir: &Path,
+    servers: &[(PathBuf, String)],
+    update_framework: bool,
+    command: &UpdateCommand,
+) -> std::io::Result<PathBuf> {
     let at = |path: &Path| script_path_from(base, steamcmd_dir, path);
     let mut lines: Vec<String> = vec![
         "@echo off".into(),
@@ -986,7 +1135,7 @@ pub fn write_steamcmd_update_script(base: &Path, steamcmd_dir: &Path, servers: &
     for (dir, branch) in servers {
         lines.push(format!("set \"DIR={}\" & set \"BRANCH={}\" & call :update", at(dir), sanitize_branch(branch)));
     }
-    lines.extend(update_routine());
+    lines.extend(update_routine(command));
     let path = steamcmd_dir.join(STEAMCMD_UPDATE_SCRIPT);
     write_changed(&path, &finish_bat(lines))?;
     Ok(path)
@@ -1013,15 +1162,27 @@ fn update_head(steamcmd: &str, update_framework: bool) -> Vec<String> {
 /// the routine those call: what DropLaunch's own update does. SteamCMD (a second run that checks every
 /// file when the first didn't go through), then Carbon or Oxide: the newest one when Rust's build
 /// changed and UPDATE_FRAMEWORK is 1, else Oxide put back when the update replaced its files.
+/// SteamCMD runs with `command` (Settings → Servers).
 #[cfg(windows)]
-fn update_routine() -> Vec<String> {
+fn update_routine(command: &UpdateCommand) -> Vec<String> {
     let app = RUST_SERVER_APP_ID;
-    let steamcmd = |validate: &str| {
-        format!("\"%STEAMCMD%\" +@ShutdownOnFailedCommand 1 +@NoPromptForPassword 1 +force_install_dir \"%DIR%\\.\" +login anonymous +app_update {app} -beta %BRANCH% {validate} +quit")
+    let steamcmd = |validate: &str| format!("\"%STEAMCMD%\" {}", command.bat(validate));
+    let whose = if command.is_default() {
+        "rem SteamCMD runs with DropLaunch's own update command (to change it: Settings > Servers > SteamCMD update command)."
+    } else {
+        "rem SteamCMD runs with your own update command, from DropLaunch's Settings > Servers > SteamCMD update command."
     };
     // Steam's manifest has `"buildid"		"21345678"`: the second word, without its quotes.
     let buildid = |var: &str| format!(r#"if exist "%MANIFEST%" for /f "tokens=2" %%a in ('findstr /c:"\"buildid\"" "%MANIFEST%"') do set "{var}=%%~a""#);
-    let (carbon, oxide) = (crate::mods::CARBON_URL, crate::mods::OXIDE_URL);
+    // Download links: DropLaunch's own, or yours from Settings › Advanced.
+    let link = |l: Link| bat_escape(&l.url());
+    let (carbon, oxide, rustedit) = (link(Link::Carbon), link(Link::Oxide), link(Link::Rustedit));
+    let after = crate::hookscript::AFTER_UPDATE;
+    let links = if [Link::Carbon, Link::Oxide, Link::Rustedit].iter().all(|l| l.url() == l.default_url()) {
+        "rem Download links: DropLaunch's own (to change them: Settings > Advanced)."
+    } else {
+        "rem Download links: from DropLaunch's Settings > Advanced."
+    };
     vec![
         "goto finished".into(),
         ":steamcmd_missing".into(),
@@ -1035,6 +1196,16 @@ fn update_routine() -> Vec<String> {
         String::new(),
         "rem set \"DIR=<folder>\" & set \"BRANCH=<branch>\" & call :update  updates one server folder the way DropLaunch does.".into(),
         ":update".into(),
+        "call :update_files".into(),
+        format!("rem Then your own {after} in the server folder, when there is one (DropLaunch never makes it)."),
+        format!("if not exist \"%DIR%\\{after}\" goto :eof"),
+        "echo.".into(),
+        format!("echo Running {after}..."),
+        "set \"DROPLAUNCH_SERVER_DIR=%DIR%\" & set \"DROPLAUNCH_BRANCH=%BRANCH%\"".into(),
+        format!("pushd \"%DIR%\" & \"%ComSpec%\" /d /c .\\{after} & popd"),
+        "goto :eof".into(),
+        String::new(),
+        ":update_files".into(),
         "for %%d in (\"%DIR%\") do set \"DIR=%%~fd\"".into(),
         format!("set \"MANIFEST=%DIR%\\steamapps\\appmanifest_{app}.acf\""),
         "echo.".into(),
@@ -1043,6 +1214,7 @@ fn update_routine() -> Vec<String> {
         "if not exist \"%DIR%\\\" goto update_missing".into(),
         "set \"BEFORE=\"".into(),
         buildid("BEFORE"),
+        whose.into(),
         steamcmd("%VALIDATE%"),
         "call :wait_steamcmd".into(),
         "rem Steam's manifest says StateFlags 4 when the update went through. When it didn't, files it had to".into(),
@@ -1080,12 +1252,25 @@ fn update_routine() -> Vec<String> {
         "set \"DONE=Oxide re-applied.\"".into(),
         ":update_framework".into(),
         "set \"ZIP=%TEMP%\\droplaunch_%FRAMEWORK%.zip\"".into(),
+        links.into(),
         format!("set \"URL={oxide}\""),
         format!("if \"%FRAMEWORK%\"==\"Carbon\" set \"URL={carbon}\""),
         "\"%SystemRoot%\\System32\\curl.exe\" -fL --retry 2 -o \"%ZIP%\" \"%URL%\" || goto update_framework_failed".into(),
         "\"%SystemRoot%\\System32\\tar.exe\" -xf \"%ZIP%\" -C \"%DIR%\" || goto update_framework_failed".into(),
         "del \"%ZIP%\" >nul 2>&1".into(),
         "echo %DONE%".into(),
+        "rem The RustEdit extension, when the server has it: its newest version goes with the new Carbon or Oxide.".into(),
+        "set \"RUSTEDIT=%DIR%\\RustDedicated_Data\\Managed\\Oxide.Ext.RustEdit.dll\"".into(),
+        "if \"%FRAMEWORK%\"==\"Carbon\" set \"RUSTEDIT=%DIR%\\carbon\\extensions\\Oxide.Ext.RustEdit.dll\"".into(),
+        "if not exist \"%RUSTEDIT%\" goto :eof".into(),
+        format!("set \"URL={rustedit}\""),
+        "\"%SystemRoot%\\System32\\curl.exe\" -fL --retry 2 -o \"%RUSTEDIT%.part\" \"%URL%\" || goto update_rustedit_failed".into(),
+        "move /y \"%RUSTEDIT%.part\" \"%RUSTEDIT%\" >nul || goto update_rustedit_failed".into(),
+        "echo RustEdit extension updated.".into(),
+        "goto :eof".into(),
+        ":update_rustedit_failed".into(),
+        "del \"%RUSTEDIT%.part\" >nul 2>&1".into(),
+        "echo Could not update the RustEdit extension: the one there stays.".into(),
         "goto :eof".into(),
         ":update_framework_failed".into(),
         "del \"%ZIP%\" >nul 2>&1".into(),
@@ -1103,7 +1288,7 @@ fn update_routine() -> Vec<String> {
 }
 
 #[cfg(not(windows))]
-pub fn write_update_script(layout: &Layout, branch: &str, _update_framework: bool) -> std::io::Result<PathBuf> {
+pub fn write_update_script(layout: &Layout, branch: &str, _update_framework: bool, command: &UpdateCommand) -> std::io::Result<PathBuf> {
     let steamcmd = script_path(layout, &install::executable(layout.steamcmd_dir));
     let branch = sanitize_branch(branch);
     let mut lines: Vec<String> = vec![
@@ -1112,7 +1297,7 @@ pub fn write_update_script(layout: &Layout, branch: &str, _update_framework: boo
         "HERE=\"$(cd \"$(dirname \"$0\")\" && pwd)\"".into(),
         "VALIDATE=\"$1\"".into(),
     ];
-    lines.extend(update_function_sh(&steamcmd));
+    lines.extend(update_function_sh(&steamcmd, command));
     lines.push(format!("update \"$HERE\" {branch}"));
     let path = layout.server_dir.join(UPDATE_SCRIPT);
     write_changed(&path, &(lines.join("\n") + "\n"))?;
@@ -1120,7 +1305,13 @@ pub fn write_update_script(layout: &Layout, branch: &str, _update_framework: boo
 }
 
 #[cfg(not(windows))]
-pub fn write_steamcmd_update_script(base: &Path, steamcmd_dir: &Path, servers: &[(PathBuf, String)], _update_framework: bool) -> std::io::Result<PathBuf> {
+pub fn write_steamcmd_update_script(
+    base: &Path,
+    steamcmd_dir: &Path,
+    servers: &[(PathBuf, String)],
+    _update_framework: bool,
+    command: &UpdateCommand,
+) -> std::io::Result<PathBuf> {
     let at = |path: &Path| script_path_from(base, steamcmd_dir, path);
     let mut lines: Vec<String> = vec![
         "#!/usr/bin/env bash".into(),
@@ -1128,7 +1319,7 @@ pub fn write_steamcmd_update_script(base: &Path, steamcmd_dir: &Path, servers: &
         "HERE=\"$(cd \"$(dirname \"$0\")\" && pwd)\"".into(),
         "VALIDATE=\"$1\"".into(),
     ];
-    lines.extend(update_function_sh(&at(&install::executable(steamcmd_dir))));
+    lines.extend(update_function_sh(&at(&install::executable(steamcmd_dir)), command));
     for (dir, branch) in servers {
         lines.push(format!("update \"{}\" {}", at(dir), sanitize_branch(branch)));
     }
@@ -1137,18 +1328,21 @@ pub fn write_steamcmd_update_script(base: &Path, steamcmd_dir: &Path, servers: &
     Ok(path)
 }
 
-/// `update <folder> <branch>` for the .sh scripts.
+/// `update <folder> <branch>` for the .sh scripts, with SteamCMD's `command` (Settings → Servers).
 #[cfg(not(windows))]
-fn update_function_sh(steamcmd: &str) -> Vec<String> {
+fn update_function_sh(steamcmd: &str, command: &UpdateCommand) -> Vec<String> {
     let app = RUST_SERVER_APP_ID;
     vec![
         "update() {".into(),
         "  [ -d \"$1\" ] || { echo \"$1 isn't there: skipped.\"; return; }".into(),
-        format!("  \"{steamcmd}\" +force_install_dir \"$1\" +login anonymous +app_update {app} -beta \"$2\" $VALIDATE +quit"),
+        format!("  \"{steamcmd}\" {}", command.sh("$VALIDATE")),
         "  # Not through (StateFlags 4 in Steam's manifest)? Often files it had to patch were missing (Carbon".into(),
         "  # removes three of Rust's own files whenever the server starts): a run that checks every file gets them.".into(),
+        format!("  grep -q '\"StateFlags\"[[:space:]]*\"4\"' \"$1/steamapps/appmanifest_{app}.acf\" 2>/dev/null || \"{steamcmd}\" {}", command.sh("validate")),
+        format!("  # Then your own {after} in the server folder, when there is one (DropLaunch never makes it).", after = crate::hookscript::AFTER_UPDATE),
         format!(
-            "  grep -q '\"StateFlags\"[[:space:]]*\"4\"' \"$1/steamapps/appmanifest_{app}.acf\" 2>/dev/null || \"{steamcmd}\" +force_install_dir \"$1\" +login anonymous +app_update {app} -beta \"$2\" validate +quit"
+            "  [ -f \"$1/{after}\" ] && (cd \"$1\" && DROPLAUNCH_SERVER_DIR=\"$1\" DROPLAUNCH_BRANCH=\"$2\" bash ./{after})",
+            after = crate::hookscript::AFTER_UPDATE
         ),
         "}".into(),
     ]
@@ -1192,6 +1386,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn start_arguments_for_every_server_are_plain_and_not_droplaunchs_own() {
+        assert_eq!(check_start_args("  "), Ok(None));
+        assert_eq!(
+            check_start_args(r#" +rustedit.key "abc+/=="   +server.pve true +server.tags "a b" "#).unwrap().as_deref(),
+            Some(r#"+rustedit.key abc+/== +server.pve true +server.tags "a b""#)
+        );
+        // Not an argument, DropLaunch's own, or a value a start file can't hold.
+        for bad in ["rustedit.key abc", "+rustedit.key", "+a 1 & calc", "+rcon.password x", "+server.seed 5", "+a %PATH%", "+a \"x!\""] {
+            assert!(check_start_args(bad).is_err(), "{bad}");
+        }
+        // A start file marked with them is told apart from one without.
+        let text = format!("@echo off\r\nrem {ADVANCED_MARK}00112233aabbccdd).\r\n");
+        assert_eq!(parse(&text, Path::new("S/start_x.bat"), Path::new("S")).advanced_args.as_deref(), Some("00112233aabbccdd"));
+        assert_eq!(parse("@echo off\r\n", Path::new("S/start_x.bat"), Path::new("S")).advanced_args, None);
     }
 
     #[test]
@@ -1326,6 +1537,66 @@ mod tests {
         // Nothing new: left alone.
         assert!(!ensure(&layout, &Target::Map(map.clone()), false, None).unwrap().1);
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// The start file in a stranger's .zip is used without asking, so it only brings settings of
+    /// the game: not an owner, Oxide's folder on their network share, EAC off, or a web address
+    /// every tester's game would fetch.
+    #[cfg(windows)]
+    #[test]
+    fn a_start_file_that_came_with_the_map_brings_no_owner_or_code() {
+        let base = temp_dir("bundled-owner");
+        let server = base.join("Server_Files");
+        let pack = base.join("Maps").join("Pack");
+        std::fs::create_dir_all(&server).unwrap();
+        std::fs::create_dir_all(&pack).unwrap();
+        let map = pack.join("Island.map");
+        std::fs::write(&map, b"map").unwrap();
+        std::fs::write(
+            pack.join("start.bat"),
+            "RustDedicated.exe -batchmode +server.levelurl \"x\" +decay.scale 0 +ownerid 76561198000000002 +global.moderatorid 76561198000000002 +oxide.directory \\\\198.51.100.7\\share \
+             +server.secure 0 +server.headerimage https://evil.example/t.png +server.motd https://evil.example +c.something 1 +app.publicip 198.51.100.7 +server.pve true\r\n",
+        )
+        .unwrap();
+        let b = bundled(&map).unwrap();
+        assert_eq!(b.args, vec![("decay.scale".to_string(), "0".to_string()), ("server.pve".to_string(), "true".to_string())]);
+        let (file, left_out) = bundled_refused(&map).unwrap();
+        assert_eq!(file, "start.bat");
+        assert_eq!(left_out, ["ownerid", "global.moderatorid", "oxide.directory", "server.secure", "server.headerimage", "server.motd", "c.something", "app.publicip"]);
+        let layout = Layout { base: &base, server_dir: &server, steamcmd_dir: &base.join("SteamCMD") };
+        let (sf, _) = ensure(&layout, &Target::Map(map.clone()), false, None).unwrap();
+        let text = std::fs::read_to_string(&sf.path).unwrap();
+        assert!(text.contains("+decay.scale 0") && text.contains("+server.pve true"), "{text}");
+        for bad in ["ownerid", "moderatorid", "oxide.directory", "server.secure", "server.headerimage", "evil.example", "c.something", "app.publicip"] {
+            assert!(!text.contains(bad), "{bad} came through:\n{text}");
+        }
+
+        // A start file an older DropLaunch wrote with one of those in it is written again without it.
+        std::fs::write(&sf.path, text.replace("+decay.scale 0", "+decay.scale 0 ^\r\n +ownerid 76561198000000002")).unwrap();
+        let (sf, rewritten) = ensure(&layout, &Target::Map(map.clone()), false, None).unwrap();
+        assert!(rewritten);
+        assert!(!std::fs::read_to_string(&sf.path).unwrap().contains("ownerid"));
+        assert!(!ensure(&layout, &Target::Map(map), false, None).unwrap().1);
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A start file of yours keeps its settings (its web address, EAC, the Rust+ port), but not an
+    /// owner or Oxide's folder: it may be one someone else made.
+    #[test]
+    fn a_dropped_start_file_brings_no_owner_either() {
+        let dir = temp_dir("dropped-owner");
+        let copy = dir.join("theirs.bat.txt");
+        std::fs::write(
+            &copy,
+            "RustDedicated.exe -batchmode +server.port 28015 +server.seed 1 +server.url https://my.example +server.secure 0 +ownerid 76561198000000002 +oxide.directory \\\\198.51.100.7\\share +harmony.load Mod +ban 76561198000000001\r\n",
+        )
+        .unwrap();
+        let chosen = Chosen::read(&copy, Use::Procgen).unwrap();
+        let names: Vec<&str> = chosen.args.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["server.port", "server.url", "server.secure"]);
+        // Settings › Advanced's own are yours, typed in DropLaunch: they aren't filtered here.
+        assert!(!never_from_a_file("rustedit.key", "abc"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -1510,7 +1781,7 @@ mod tests {
         let server = base.join("Server_Files");
         std::fs::create_dir_all(&server).unwrap();
         let layout = Layout { base: &base, server_dir: &server, steamcmd_dir: &base.join("SteamCMD") };
-        let path = write_update_script(&layout, "staging & del", true).unwrap();
+        let path = write_update_script(&layout, "staging & del", true, &UpdateCommand::default()).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains(r#"set "STEAMCMD=%~dp0..\SteamCMD\steamcmd.exe""#), "{text}");
         assert!(text.contains("set \"DIR=%~dp0.\" & set \"BRANCH=stagingdel\" & call :update\r\n"), "{text}");
@@ -1522,8 +1793,44 @@ mod tests {
         // The update setting: Carbon or Oxide with a new Rust build.
         assert!(text.contains("set \"UPDATE_FRAMEWORK=1\"\r\n"));
         assert!(text.contains(crate::mods::CARBON_URL) && text.contains(crate::mods::OXIDE_URL));
-        write_update_script(&layout, "staging", false).unwrap();
+        assert!(text.contains("rem SteamCMD runs with DropLaunch's own update command"));
+        // The RustEdit extension with a new Carbon or Oxide, and your after_update.bat.
+        assert!(text.contains(crate::mods::RUSTEDIT_URL) && text.contains(r"carbon\extensions\Oxide.Ext.RustEdit.dll"));
+        assert!(text.contains(":update\r\ncall :update_files\r\n"), "{text}");
+        assert!(text.contains(r#"pushd "%DIR%" & "%ComSpec%" /d /c .\after_update.bat & popd"#), "{text}");
+        write_update_script(&layout, "staging", false, &UpdateCommand::default()).unwrap();
         assert!(std::fs::read_to_string(&path).unwrap().contains("set \"UPDATE_FRAMEWORK=0\"\r\n"));
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn update_scripts_use_your_own_steamcmd_command() {
+        let base = temp_dir("updown");
+        let (server, steamcmd) = (base.join("Server_Files"), base.join("SteamCMD"));
+        std::fs::create_dir_all(&server).unwrap();
+        std::fs::create_dir_all(&steamcmd).unwrap();
+        let own = r#"+@sSteamCmdForcePlatformType windows +force_install_dir %DIR% +login anonymous +app_update 258550 -beta %BRANCH% %VALIDATE% +runscript "C:\My Scripts\x.txt" +quit"#;
+        let command = UpdateCommand::parse(own).unwrap();
+        let layout = Layout { base: &base, server_dir: &server, steamcmd_dir: &steamcmd };
+        let servers = vec![(server.clone(), "public".to_string())];
+        let paths = [
+            write_update_script(&layout, "public", true, &command).unwrap(),
+            write_steamcmd_update_script(&base, &steamcmd, &servers, true, &command).unwrap(),
+        ];
+        for path in paths {
+            let text = std::fs::read_to_string(&path).unwrap();
+            let run = |validate: &str| {
+                format!(
+                    r#""%STEAMCMD%" +@sSteamCmdForcePlatformType windows +force_install_dir "%DIR%\." +login anonymous +app_update 258550 -beta %BRANCH% {validate} +runscript "C:\My Scripts\x.txt" +quit{}"#,
+                    "\r\n"
+                )
+            };
+            assert!(text.contains(&run("%VALIDATE%")), "{text}");
+            assert!(text.contains(&run("validate")), "{text}");
+            assert!(!text.contains("+@ShutdownOnFailedCommand"), "{text}");
+            assert!(text.contains("rem SteamCMD runs with your own update command"), "{text}");
+        }
         let _ = std::fs::remove_dir_all(base);
     }
 
@@ -1539,7 +1846,7 @@ mod tests {
             (base.join("Server_Files_staging"), "staging & del".to_string()),
             (elsewhere.join("Rust"), "aux01".to_string()),
         ];
-        let path = write_steamcmd_update_script(&base, &steamcmd, &servers, false).unwrap();
+        let path = write_steamcmd_update_script(&base, &steamcmd, &servers, false, &UpdateCommand::default()).unwrap();
         assert_eq!(path, steamcmd.join(STEAMCMD_UPDATE_SCRIPT));
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains(r#"set "STEAMCMD=%~dp0steamcmd.exe""#), "{text}");
@@ -1555,7 +1862,7 @@ mod tests {
         // Unchanged settings: the file isn't written again.
         let written = std::fs::metadata(&path).unwrap().modified().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(30));
-        write_steamcmd_update_script(&base, &steamcmd, &servers, false).unwrap();
+        write_steamcmd_update_script(&base, &steamcmd, &servers, false, &UpdateCommand::default()).unwrap();
         assert_eq!(std::fs::metadata(&path).unwrap().modified().unwrap(), written);
         let _ = std::fs::remove_dir_all(base);
         let _ = std::fs::remove_dir_all(elsewhere);

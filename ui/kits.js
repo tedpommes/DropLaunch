@@ -9,7 +9,7 @@
 //
 // Dragging is done with pointer events: the window takes the system's drag and drop for files
 // (dropping a .map on DropLaunch), so the page's own HTML drag and drop never starts.
-import { $, el, icon, invoke, toast, confirmDialog } from "./util.js";
+import { $, el, icon, invoke, toast, confirmDialog, holdDuringPress } from "./util.js";
 import { Dropdown } from "./dropdown.js";
 import { t, tn } from "./i18n.js";
 
@@ -914,6 +914,8 @@ export function initKits(ctx) {
   // ---------------------------------------------------------------- what shows, back
   /** The card as it should be now (`force`: even if nothing it shows seems to have changed). */
   function render(force = false) {
+    // Not under a button being pressed (Give): that click would be lost.
+    if (holdDuringPress(card, () => render(true))) return;
     card.hidden = !ctx.state || !kits;
     if (editing) {
       // Leaving full screen while editing: the editor waits for the next time.
@@ -984,8 +986,18 @@ export function initKits(ctx) {
     kits = await invoke("kits_load").catch(() => kits);
     if (!editing) selected = e.payload.id;
     render(true);
-    toast(t("kits.fromGame.toast", { name: e.payload.name }), "ok");
+    toast(t("kits.fromGame.toast", { name: e.payload.name }), "ok", () => showKit(e.payload.id));
   });
+
+  /** The Kits card, unfolded, on this kit (where a toast about it led). */
+  function showKit(id) {
+    if (!editing && kits?.some((k) => k.id === id)) {
+      selected = id;
+      render(true);
+    }
+    ctx.settings?.close();
+    ctx.showCard("kits-card");
+  }
 
   /** Kit files dropped on DropLaunch: added; what isn't a kit is handed back (language files). */
   async function importFiles(paths) {
@@ -995,7 +1007,8 @@ export function initKits(ctx) {
         kits = await invoke("kits_load");
         selected = reply.imported.at(-1).id;
         render(true);
-        toast(reply.imported.length === 1 ? t("kits.imported", { name: reply.imported[0].name }) : t("kits.importedMany", { n: reply.imported.length }), "ok");
+        const last = selected;
+        toast(reply.imported.length === 1 ? t("kits.imported", { name: reply.imported[0].name }) : t("kits.importedMany", { n: reply.imported.length }), "ok", () => showKit(last));
       }
       return reply.rest;
     } catch (err) {

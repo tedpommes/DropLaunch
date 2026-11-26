@@ -45,12 +45,17 @@ pub fn download(url: &str, dest: &Path, cancel: &CancelToken, progress: &mut dyn
     Ok(())
 }
 
-/// Unpack a .zip or .tar.gz into `dir`, overwriting existing files.
+/// Unpack a .zip or .tar.gz into `dir`, overwriting existing files. What it is comes from its
+/// first bytes (a link of yours in Settings › Advanced may give a .tar.gz a .zip's name), else
+/// from its name.
 pub fn extract(archive: &Path, dir: &Path) -> Result<()> {
     let name = archive.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_ascii_lowercase();
-    if name.ends_with(".zip") {
+    let mut magic = [0u8; 4];
+    let read = File::open(archive).and_then(|mut f| f.read(&mut magic)).unwrap_or(0);
+    let (zip, gzip) = (read >= 4 && magic == *b"PK\x03\x04", read >= 2 && magic[..2] == [0x1f, 0x8b]);
+    if zip || (!gzip && name.ends_with(".zip")) {
         extract_zip(archive, dir)
-    } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+    } else if gzip || name.ends_with(".tar.gz") || name.ends_with(".tgz") {
         extract_tar_gz(archive, dir)
     } else {
         bail!(t!("error.unpackUnknown", name))

@@ -166,12 +166,16 @@ impl Tracker {
                 self.plugins.push(name.to_string());
             }
         }
+        // Your RCON line (Settings › Advanced), for when Rust's own one changes.
+        if !self.rcon_started && !line.is_empty() && crate::advanced::is_rcon_line(line) {
+            self.rcon_started = true;
+        }
         if line.is_empty() || self.ready() {
             return changed;
         }
         let before = (self.stage, self.detail.clone(), self.percent as i32, self.work);
 
-        if line.starts_with("Server startup complete") {
+        if is_ready_line(line) {
             self.set(Stage::Ready, "", 100.0);
         } else if line.starts_with("[Bootstrap] Opening Bundles") || line.starts_with("Loading shared/") {
             self.set(Stage::GameFiles, &t!("boot.detail.bundles"), 6.0);
@@ -366,8 +370,14 @@ pub enum Level {
     Ok,
 }
 
+/// The server says it's ready: Rust's own line, or yours (Settings › Advanced) for when Rust's
+/// changes.
+pub fn is_ready_line(line: &str) -> bool {
+    line.starts_with("Server startup complete") || crate::advanced::is_ready_line(line)
+}
+
 pub fn classify(line: &str) -> Level {
-    if line.starts_with("Server startup complete") {
+    if is_ready_line(line) {
         Level::Ok
     } else if line.contains("Exception") || line.starts_with("Error") || line.starts_with("[Error]") || line.contains("Failed to load map") {
         Level::Error

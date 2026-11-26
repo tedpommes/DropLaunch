@@ -42,18 +42,39 @@ are touched, and Join automatically is off.
 The window has a content security policy (`tauri.conf.json`, `app.security.csp`): scripts only
 from `ui/` (plus the small theme script in `index.html`, whose hash Tauri adds when it builds),
 pictures from `ui/`, `blob:` and `data:` (kit items, avatars, map icons), requests only to `ui/`
-and Tauri's IPC, inline styles allowed (`el()` sets style attributes; Tauri is told not to add
-hashes to `style-src`, which would switch `'unsafe-inline'` off). Text reaches the page through
-`textContent` (`el({ text })`, `rich()`), never as HTML. Something that loads from elsewhere
-needs its source added there first.
+and Tauri's IPC, frames only from the `addon` address (add-on pages, `frame-src`), inline styles
+allowed (`el()` sets style attributes; Tauri is told not to add hashes to `style-src`, which would
+switch `'unsafe-inline'` off). Text reaches the page through `textContent` (`el({ text })`,
+`rich()`), never as HTML. Something that loads from elsewhere needs its source added there first.
+
+Add-ons (`addons.rs`, `ui/addons.js`, `addons/`): pages served over the `addon` custom address
+(`http://addon.localhost/<id>/<file>`, registered in `lib.rs`) into sandboxed frames. Tauri counts
+every registered address as the app's own, with every command, so the frames' missing origin is
+the wall: the frame's `sandbox` (no `allow-same-origin`, checked by `tests/addon_frames.rs`), the
+`sandbox` that starts every add-on page's own policy, and the main window refusing to show any
+page but DropLaunch's (`on_navigation`, `own_page` in `lib.rs`). Calls come as messages to the
+window and go to `addon_call`, which checks them against the add-on's `addon.json`. A new call
+goes in `ADDON_CALLS` and `addon_permission` (a test checks both agree), and a new event in
+`EVENTS` in `ui/addons.js`: add-ons see both lists (`droplaunch.has`). A failed call answers with
+an `AddonError` code. After a Tauri or wry update, run the isolation checks in `ADDONS-PLAN.md`
+again.
 
 ## Layout
 
 ```
-ui/                    index.html, styles.css, app.js (+ i18n.js, theme.js, settings.js, kits.js, guide.js, maps.js, server.js, console.js, playtest.js, rent.js, mapcanvas.js, mapviewer.js, graph.js, game.js, updates.js, about.js, layout.js, menu.js, dropdown.js, util.js), licenses.json (third-party notices, generated), hosts/ (hosting companies' logos), kits/items.json (Rust's item list), lang/en.json (every text: the built-in English language file), themes/ (the four themes that come with it)
+ui/                    index.html, styles.css, app.js (+ i18n.js, theme.js, settings.js, kits.js, guide.js, maps.js, server.js, console.js, playtest.js, rent.js, mapcanvas.js, mapviewer.js, graph.js, game.js, updates.js, about.js, layout.js, menu.js, dropdown.js, addons.js, util.js), licenses.json (third-party notices, generated), hosts/ (hosting companies' logos), kits/items.json (Rust's item list), lang/en.json (every text: the built-in English language file), themes/ (the four themes that come with it)
 src-tauri/src/
-  lib.rs               app setup (single instance + opened files, dialog plugin, commands)
-  commands.rs          what the UI can call
+  lib.rs               app setup (single instance + opened files, dialog plugin, the addon address,
+                       the window and what it may show, commands)
+  commands.rs          what the UI can call (and add-ons, through addon_call)
+  addons.rs            add-ons: addon.json, the Add-ons folder and linked folders, installing,
+                       storage, serving their pages with their content policy
+  advanced.rs          Settings › Advanced: own download links, log texts, start arguments, a
+                       second watched folder
+  configfiles.rs       the config files add-ons may list, read and write (configs:read/write):
+                       server/<identity>/cfg, Carbon's or Oxide's own, plugins', modules'
+  hookscript.rs        before_start.bat / after_update.bat in the server folder, run hidden, and
+                       only as OK'd (fingerprints in the data folder's hook-scripts.json)
   lang.rs              texts: English built in (ui/lang/en.json), language files next to the exe or dropped on it, t!()
   jobs.rs              setup / install / update / verify / Oxide re-apply as event streams
   config.rs            settings in DropLaunch-data next to the exe (an entry per folder, droplaunch.json moved in), first-start folder detection, one server folder per branch
@@ -82,8 +103,12 @@ src-tauri/src/
   platform.rs          OS bits (job objects, console windows, process lookup, free space, URLs); a
                        server's start file runs in its own console, created inside its job (no
                        suspended start + resume, which antivirus software reads as code injection)
-  steamcmd/            runner, vt, parser, install, manifest, appinfo, vdf
-src-tauri/tests/       replays of real SteamCMD captures, third-party notices check, language file check
+  steamcmd/            runner, vt, parser, install, manifest, appinfo, vdf, command (your own
+                       SteamCMD command for updates)
+src-tauri/tests/       replays of real SteamCMD captures, third-party notices check, language file check,
+                       add-on frames are sandboxed
+addons/                the add-on SDK (_sdk/droplaunch.js and .css, served by DropLaunch),
+                       README.md (how to make one) and pack_addon.py
 src-tauri/examples/    release signing, notices (ui/licenses.json), SteamCMD live test, map info
 src-tauri/notices-extra/  license files some packages leave out (for the notices)
 ```

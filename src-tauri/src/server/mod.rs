@@ -40,10 +40,17 @@ const QUIT_TIMEOUT: Duration = Duration::from_secs(45);
 /// on a slow drive, or one an antivirus scans first, takes a while. A start file that ended
 /// without starting it is seen at once (its job has no processes left).
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(180);
+/// RCON is connected this long after the start also without the log saying it's up (a Rust that
+/// words its line differently; the client just retries until the server takes it).
+const RCON_FALLBACK: Duration = Duration::from_secs(60);
 const INFO_ID: i32 = 2_000_000_000;
 /// RCON questions that went unanswered in time, remembered so their late answers are dropped.
 const ABANDONED_KEEP: usize = 32;
 const QUIT_ID: i32 = INFO_ID - 1;
+/// Who's on the server (Rust's `playerlist`): one list for Give items, add-ons and their
+/// `players` event, instead of each asking on its own.
+const PLAYERS_ID: i32 = INFO_ID + 1;
+const PLAYERS_EVERY: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -135,6 +142,11 @@ pub struct ConsoleLine {
 pub enum ServerEvent {
     State { server: Option<Box<ServerView>> },
     Lines { lines: Vec<ConsoleLine> },
+    /// Someone joined or left (or the list is known for the first time): Rust's `playerlist`
+    /// entries, without their IP addresses.
+    Players { players: Vec<serde_json::Value>, joined: Vec<serde_json::Value>, left: Vec<serde_json::Value> },
+    /// Chat, as the server sent it over RCON.
+    Chat { messages: Vec<rcon::Chat> },
 }
 
 /// What happened when the UI asked for a start.
@@ -148,6 +160,9 @@ pub enum StartReply {
     Queued { title: String },
     /// Oxide is installed but inactive (an update replaced its files); ask first.
     OxideInactive,
+    /// Your before_start.bat is new in the server folder, or changed since you OK'd it: ask first
+    /// (it isn't run unseen).
+    Script { name: String, path: String, changed: bool },
 }
 
 /// Everything needed to (re)start a server later, e.g. after a restart's stop.
@@ -243,8 +258,9 @@ struct Hooks {
     server_of: fn(u32) -> Option<ProcessHandle>,
     /// A server from one of these folders that DropLaunch didn't start.
     find_running: fn(&[PathBuf]) -> Option<Found>,
-    /// Rust's old copies of the map out of the game's cache: lines for the console.
-    clean_game_cache: fn(&Target, &StartContext) -> Vec<(String, &'static str)>,
+    /// Before a start: Rust's old copies of the map out of the game's cache, and your
+    /// before_start.bat.
+    prepare: fn(&Target, &StartContext) -> Prepared,
     /// Something already listens on the server's ports.
     port_problem: fn(u16, u16) -> Option<String>,
     /// Join automatically: opens Rust on this branch and port; a line for the console.
@@ -256,7 +272,7 @@ impl Hooks {
         launch: platform::launch_console,
         server_of: started_server,
         find_running,
-        clean_game_cache,
+        prepare: prepare_start,
         port_problem,
         join: join_now,
     };
@@ -305,6 +321,51 @@ struct Inner {
     waiting: HashMap<i32, mpsc::Sender<String>>,
     /// Those that stopped waiting (no answer in time): a late answer isn't for the console.
     abandoned: VecDeque<i32>,
+    /// Chat since the last round, for the UI.
+    chat_out: Vec<rcon::Chat>,
+    /// Who's on now, who joined, who left: when that changed since the last round.
+    players_out: Option<PlayersChange>,
+}
+
+/// (everyone on now, who joined, who left)
+type PlayersChange = (Vec<serde_json::Value>, Vec<serde_json::Value>, Vec<serde_json::Value>);
+
+/// A `playerlist` entry's Steam ID.
+fn steam_id_of(player: &serde_json::Value) -> Option<String> {
+    match player.get("SteamID")? {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// Who joined and who left between two lists (None: the same players). A list known for the
+/// first time has no one joining: they were there already.
+fn players_changed(before: Option<&[serde_json::Value]>, now: &[serde_json::Value]) -> Option<(Vec<serde_json::Value>, Vec<serde_json::Value>)> {
+    let Some(before) = before else { return Some((Vec::new(), Vec::new())) };
+    let ids = |list: &[serde_json::Value]| list.iter().filter_map(steam_id_of).collect::<Vec<_>>();
+    let (old, new) = (ids(before), ids(now));
+    let joined: Vec<_> = now.iter().filter(|p| steam_id_of(p).is_some_and(|id| !old.contains(&id))).cloned().collect();
+    let left: Vec<_> = before.iter().filter(|p| steam_id_of(p).is_some_and(|id| !new.contains(&id))).cloned().collect();
+    (!joined.is_empty() || !left.is_empty()).then_some((joined, left))
+}
+
+/// Rust's `playerlist` entries without the players' IP addresses (`Address`).
+pub fn hide_addresses(players: &mut serde_json::Value) {
+    for player in players.as_array_mut().into_iter().flatten() {
+        if let Some(fields) = player.as_object_mut() {
+            fields.remove("Address");
+        }
+    }
+}
+
+fn without_addresses(list: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    let mut list = serde_json::Value::Array(list);
+    hide_addresses(&mut list);
+    match list {
+        serde_json::Value::Array(list) => list,
+        _ => Vec::new(),
+    }
 }
 
 struct Live {
@@ -324,6 +385,9 @@ struct Live {
     rcon_connected: bool,
     info: Option<ServerInfo>,
     last_info: Option<Instant>,
+    /// Rust's `playerlist`, as last asked (None: not yet).
+    players: Option<Vec<serde_json::Value>>,
+    last_players: Option<Instant>,
     started_at: i64,
     ready_at: Option<i64>,
     stop_requested: bool,
@@ -510,11 +574,27 @@ impl ServerManager {
         (inner.view(), inner.lines.iter().cloned().collect())
     }
 
+    /// The server's state alone, without a copy of the console (add-ons ask for it often).
+    pub fn view(&self) -> Option<ServerView> {
+        self.inner.locked().view()
+    }
+
+    /// The console alone.
+    pub fn lines(&self) -> Vec<ConsoleLine> {
+        self.inner.locked().lines.iter().cloned().collect()
+    }
+
+    /// Who's on the running server: Rust's `playerlist` as DropLaunch last asked it (every few
+    /// seconds while it's ready), with their IP addresses. None: no server, or not asked yet.
+    pub fn players(&self) -> Option<Vec<serde_json::Value>> {
+        self.inner.locked().live.as_ref().filter(|l| l.rcon_connected).and_then(|l| l.players.clone())
+    }
+
     pub fn start(&self, target: Target, prefab: bool, ctx: StartContext, replace: bool) -> Result<StartReply, String> {
         // The game's map cache first, without the lock (a start that has to wait for the running
         // server to stop does it when it's its turn).
         let idle = self.inner.locked().live.is_none();
-        let cleaned = idle.then(|| (self.hooks.clean_game_cache)(&target, &ctx));
+        let cleaned = idle.then(|| (self.hooks.prepare)(&target, &ctx));
         let mut inner = self.inner.locked();
         if let Some(live) = inner.live.as_mut() {
             let title = live.title.clone();
@@ -625,6 +705,13 @@ impl ServerManager {
         }
     }
 
+    /// A line from DropLaunch in the server's console (`kind`: app | warn | error).
+    pub fn note(&self, text: String, kind: &'static str) {
+        let mut inner = self.inner.locked();
+        inner.push(text, kind);
+        inner.dirty = true;
+    }
+
     /// Bug reports the server logged since the last call (the playtest plugin's JSON).
     pub fn take_reports(&self) -> Vec<String> {
         std::mem::take(&mut self.inner.locked().reports)
@@ -655,7 +742,7 @@ impl ServerManager {
 
     /// `cleaned`: the console's lines from cleaning the game's map cache for this start (None: not
     /// done yet, it's done here).
-    fn launch(&self, inner: &mut Inner, target: Target, prefab: bool, ctx: &StartContext, cleaned: Option<Vec<(String, &'static str)>>) -> Result<Live, String> {
+    fn launch(&self, inner: &mut Inner, target: Target, prefab: bool, ctx: &StartContext, cleaned: Option<Prepared>) -> Result<Live, String> {
         if !ctx.server_dir.join(SERVER_EXECUTABLE).is_file() {
             return Err(t!("error.notInstalled"));
         }
@@ -669,6 +756,13 @@ impl ServerManager {
         let (start, rewritten) = startfile::ensure(&layout, &target, prefab, chosen.as_ref()).map_err(|e| t!("error.startFile", error = e))?;
         if let Some(problem) = (self.hooks.port_problem)(start.server_port, start.rcon_port) {
             return Err(problem);
+        }
+        // The start file that came with the map wanted more than a map's settings (an owner,
+        // Oxide's folder, a web address…): said, so it's no surprise they're missing.
+        if let Target::Map(map) = &target {
+            if let Some((file, names)) = startfile::bundled_refused(map) {
+                inner.push(t!("serverlog.bundledLeftOut", file, names = names.join(", ")), "warn");
+            }
         }
         if start.made_by_droplaunch() {
             if let Err(e) = owner::apply(&ctx.server_dir, &start.identity, ctx.owner.as_ref()) {
@@ -698,8 +792,12 @@ impl ServerManager {
                 Err(_) => return Err(t!("error.logInUse", path = log.display())),
             }
         }
-        for (text, kind) in cleaned.unwrap_or_else(|| (self.hooks.clean_game_cache)(&target, ctx)) {
+        let prepared = cleaned.unwrap_or_else(|| (self.hooks.prepare)(&target, ctx));
+        for (text, kind) in prepared.lines {
             inner.push(text, kind);
+        }
+        if let Some(refused) = prepared.refused {
+            return Err(refused);
         }
         let launched = (self.hooks.launch)(&ctx.server_dir, &start.file_name(), &[(LAUNCH_ENV, "1")])
             .map_err(|e| t!("error.startFailed", file = start.file_name(), error = e))?;
@@ -727,6 +825,8 @@ impl ServerManager {
             rcon_connected: false,
             info: None,
             last_info: None,
+            players: None,
+            last_players: None,
             started_at: now_ms(),
             ready_at: None,
             stop_requested: false,
@@ -772,7 +872,7 @@ impl ServerManager {
         // The slow parts outside the lock: reading back the log of a server that was already
         // running, and the game's map cache for a start that waited.
         let found = scan_dirs.and_then(|dirs| (self.hooks.find_running)(&dirs));
-        let cleaned = to_clean.map(|(target, ctx)| ((self.hooks.clean_game_cache)(&target, &ctx), target));
+        let cleaned = to_clean.map(|(target, ctx)| ((self.hooks.prepare)(&target, &ctx), target));
 
         let mut inner = self.inner.locked();
         if inner.shutting_down {
@@ -813,6 +913,8 @@ impl ServerManager {
 
         let state = std::mem::take(&mut inner.dirty).then(|| inner.view());
         let lines = std::mem::take(&mut inner.outbox);
+        let messages = std::mem::take(&mut inner.chat_out);
+        let players = inner.players_out.take();
         drop(inner);
         if let Some(app) = self.app.get() {
             if !lines.is_empty() {
@@ -820,6 +922,12 @@ impl ServerManager {
             }
             if let Some(server) = state {
                 let _ = app.emit("server", ServerEvent::State { server: server.map(Box::new) });
+            }
+            if let Some((players, joined, left)) = players {
+                let _ = app.emit("server", ServerEvent::Players { players: without_addresses(players), joined: without_addresses(joined), left: without_addresses(left) });
+            }
+            if !messages.is_empty() {
+                let _ = app.emit("server", ServerEvent::Chat { messages });
             }
         }
     }
@@ -830,6 +938,7 @@ impl ServerManager {
         // (text, kind, source)
         let mut out: Vec<(String, &'static str, &'static str)> = Vec::new();
         let mut dirty = false;
+        let mut players_change: Option<PlayersChange> = None;
 
         // 1. Find RustDedicated.exe once the start file has started it.
         if live.process.is_none() {
@@ -893,8 +1002,10 @@ impl ServerManager {
             dirty = true;
         }
 
-        // 3. RCON: connect as soon as the server opened it, then poll serverinfo while ready.
-        if live.rcon.is_none() && live.boot.rcon_started && !live.stop_requested {
+        // 3. RCON: connect as soon as the server opened it (or a while after the start, when the
+        // log never said so), then poll serverinfo while ready.
+        let rcon_due = live.boot.rcon_started || live.boot.ready() || now_ms() - live.started_at >= RCON_FALLBACK.as_millis() as i64;
+        if live.rcon.is_none() && rcon_due && !live.stop_requested {
             if let Some(password) = live.start.as_ref().and_then(|s| s.rcon_password.clone()) {
                 live.rcon = Some(rcon::Client::start(live.start.as_ref().map_or(startfile::DEFAULT_RCON_PORT, |s| s.rcon_port), password));
             }
@@ -927,6 +1038,16 @@ impl ServerManager {
                             dirty = true;
                         }
                     }
+                    rcon::Event::Reply { id: PLAYERS_ID, text } => {
+                        // Anything but a list (an error text) leaves the last one.
+                        if let Ok(serde_json::Value::Array(list)) = serde_json::from_str::<serde_json::Value>(text.trim()) {
+                            if let Some((joined, left)) = players_changed(live.players.as_deref(), &list) {
+                                players_change = Some((list.clone(), joined, left));
+                            }
+                            live.players = Some(list);
+                        }
+                    }
+                    rcon::Event::Chat(chat) => inner.chat_out.push(chat),
                     rcon::Event::Reply { text, .. } => {
                         let text = text.trim_end();
                         if !text.is_empty() {
@@ -938,6 +1059,10 @@ impl ServerManager {
             if live.phase == Phase::Ready && live.rcon_connected && live.last_info.is_none_or(|t| t.elapsed() >= INFO_EVERY) {
                 live.last_info = Some(Instant::now());
                 client.send(INFO_ID, "serverinfo");
+            }
+            if live.phase == Phase::Ready && live.rcon_connected && live.last_players.is_none_or(|t| t.elapsed() >= PLAYERS_EVERY) {
+                live.last_players = Some(Instant::now());
+                client.send(PLAYERS_ID, "playerlist");
             }
         }
 
@@ -966,6 +1091,10 @@ impl ServerManager {
             live.phase = if crashed { Phase::Crashed } else { Phase::Stopped };
             live.rcon = None;
             live.rcon_connected = false;
+            // Everyone who was on has left with it.
+            if let Some(left) = live.players.take().filter(|p| !p.is_empty()) {
+                players_change = Some((Vec::new(), Vec::new(), left));
+            }
             let last = live.recent.iter().rev().find(|l| !l.trim().is_empty()).cloned().unwrap_or_default();
             if crashed || died {
                 crate::log::write(&crash_log_line(live, code, died, late, &last));
@@ -1019,6 +1148,9 @@ impl ServerManager {
         if dirty {
             inner.dirty = true;
         }
+        if players_change.is_some() {
+            inner.players_out = players_change;
+        }
     }
 
 }
@@ -1062,6 +1194,8 @@ fn find_running(dirs: &[PathBuf]) -> Option<Found> {
         rcon_connected: false,
         info: None,
         last_info: None,
+        players: None,
+        last_players: None,
         started_at: started.and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or_else(now_ms, |d| d.as_millis() as i64),
         ready_at: None,
         stop_requested: false,
@@ -1116,6 +1250,58 @@ fn catch_up(tail: &mut LogTail, key: Option<&str>) -> CatchUp {
         }
     }
     caught
+}
+
+/// What happens before a server starts, done without holding the lock (it can take a while).
+#[derive(Debug, Default)]
+struct Prepared {
+    /// For the console.
+    lines: Vec<(String, &'static str)>,
+    /// The server isn't started, for this reason (your before_start.bat went wrong).
+    refused: Option<String>,
+}
+
+/// Before a start: the game's map cache, then your before_start.bat in the server folder, when
+/// there is one (an error from it, or one that takes too long, and the server isn't started).
+fn prepare_start(target: &Target, ctx: &StartContext) -> Prepared {
+    let mut prepared = Prepared { lines: clean_game_cache(target, ctx), refused: None };
+    let name = crate::hookscript::BEFORE_START;
+    if !crate::hookscript::present(&ctx.server_dir, name) {
+        return prepared;
+    }
+    let map = match target {
+        Target::Map(map) => map.display().to_string(),
+        Target::Procgen | Target::Preset(_) => String::new(),
+    };
+    // The map's name with nothing cmd reads as code (an `&` in a file name runs what follows it
+    // when a script writes %DROPLAUNCH_MAP% without quotes): for scripts that print or use it.
+    let map_name = match target {
+        Target::Map(map) => safe_name(&map.file_stem().unwrap_or_default().to_string_lossy()),
+        Target::Procgen | Target::Preset(_) => String::new(),
+    };
+    let env = [("DROPLAUNCH_MAP", map), ("DROPLAUNCH_MAP_NAME", map_name), ("DROPLAUNCH_TITLE", target.title())];
+    use crate::hookscript::{Checked, Trust};
+    match crate::hookscript::run_checked(&ctx.data, &ctx.server_dir, name, &env, crate::hookscript::BEFORE_START_TIMEOUT) {
+        Checked::Missing => {}
+        Checked::Ran(Ok(ran)) => {
+            prepared.lines.push((t!("hook.running", name), "app"));
+            prepared.lines.extend(ran.lines.iter().map(|l| (l.clone(), "log")));
+            prepared.refused = ran.problem(name).map(|why| t!("hook.refused", why));
+        }
+        Checked::Ran(Err(e)) => {
+            prepared.lines.push((t!("hook.running", name), "app"));
+            prepared.refused = Some(t!("hook.refused", why = t!("hook.cantRun", name, error = e)));
+        }
+        // Put there or changed by something else since you OK'd it (a start from the map list asks
+        // first; a restart can't): the server isn't started with it unseen.
+        Checked::NotOk(trust) => prepared.refused = Some(if trust == Trust::Changed { t!("hook.notOkChanged", name) } else { t!("hook.notOkNew", name) }),
+    }
+    prepared
+}
+
+/// Only letters, digits, `-` and `_` (anything else becomes `_`), at most 100 of them.
+fn safe_name(name: &str) -> String {
+    name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' }).take(100).collect()
 }
 
 /// Rust's older copies of the map out of the game's map cache, so the game can't load one of them
@@ -1284,6 +1470,29 @@ impl LogTail {
 mod tests {
     use super::*;
 
+    /// Third sweep, S9: a map named to run something in a script that prints its name.
+    #[test]
+    fn the_maps_name_for_scripts_holds_no_code() {
+        assert_eq!(safe_name("Island&calc&"), "Island_calc_");
+        assert_eq!(safe_name("Race Track_v2"), "Race_Track_v2");
+        assert_eq!(safe_name("a%PATH%|b>c^d\"e"), "a_PATH__b_c_d_e");
+    }
+
+    /// The `players` event: who joined and who left, by Steam ID (a ping that changed isn't news);
+    /// the first list has no one joining, and nobody's IP address goes out.
+    #[test]
+    fn the_player_list_says_who_joined_and_left() {
+        let p = |id: &str, ping: u32| serde_json::json!({ "SteamID": id, "DisplayName": format!("P{id}"), "Ping": ping, "Address": "198.51.100.7:51234" });
+        let first = vec![p("1", 10), p("2", 20)];
+        assert_eq!(players_changed(None, &first), Some((vec![], vec![])));
+        assert_eq!(players_changed(Some(&first), &[p("1", 40), p("2", 5)]), None);
+        let (joined, left) = players_changed(Some(&first), &[p("2", 20), p("3", 30)]).unwrap();
+        assert_eq!(joined, vec![p("3", 30)]);
+        assert_eq!(left, vec![p("1", 10)]);
+        let out = without_addresses(vec![p("1", 10)]);
+        assert!(out[0].get("Address").is_none() && out[0]["SteamID"] == "1");
+    }
+
     #[test]
     fn log_tail_reads_whole_lines_and_handles_restarts() {
         let path = std::env::temp_dir().join(format!("droplaunch-tail-{}.log", std::process::id()));
@@ -1322,6 +1531,8 @@ mod tests {
             rcon_connected: false,
             info: None,
             last_info: None,
+            players: None,
+            last_players: None,
             started_at: now_ms() - 52_000,
             ready_at: None,
             stop_requested: false,
@@ -1460,7 +1671,7 @@ mod tests {
                 launch: fake_launch,
                 server_of: fake_server_of,
                 find_running: |_| None,
-                clean_game_cache: |_, _| Vec::new(),
+                prepare: |_, _| Prepared::default(),
                 port_problem: |_, _| None,
                 join: |_, _| "a test never joins".into(),
             };

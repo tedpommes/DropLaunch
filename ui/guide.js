@@ -1,7 +1,7 @@
 // The guide, for people new to hosting servers and making maps: a tip about a step when it comes
 // up (pointing at what it's about, once each), and the Getting started checklist on the Maps page.
 // Switched on with "Show me around" on the first start, or in Settings (Guide).
-import { $, el, icon, toast } from "./util.js";
+import { $, el, icon, toast, pointAt } from "./util.js";
 import { t, rich } from "./i18n.js";
 
 const OPEN_KEY = "droplaunch.guideOpen";
@@ -47,7 +47,7 @@ export function initGuide(ctx) {
   // The options show before it starts and while the files download (Set up on the welcome screen
   // starts the download right away).
   const setupChoosing = () => setupOpen() && !$("setup-options").hidden;
-  const setupRunning = () => setupOpen() && !$("setup-tasks").hidden && !$("setup-cancel").hidden;
+  const setupRunning = () => setupOpen() && !$("setup-tasks").hidden && !$("setup-auto-row").hidden;
   const mapsPage = () => !$("view-maps").hidden && !ctx.playtest?.isOpen();
   const panel = (selector) => $("server-panel").querySelector(selector);
   // Texts (keys in the language file): {server} and {steamcmd} are download sizes, green or red
@@ -65,7 +65,7 @@ export function initGuide(ctx) {
       check: () => !ctx.state.setupNeeded,
       show: async () => {
         await ctx.openSetup();
-        if ($("setup").hidden) toast(t("guide.toast.setupRunning"));
+        if ($("setup").hidden) toast(t("guide.toast.setupRunning"), "", () => pointAt($("strip")));
       },
     },
     {
@@ -551,7 +551,7 @@ export function initGuide(ctx) {
     candidate = null;
     quietUntil = Date.now() + QUIET;
     await save({ on });
-    if (!on) toast(t("guide.offToast"));
+    if (!on) toast(t("guide.offToast"), "", () => ctx.settings.open("guide"));
   }
 
   async function startOver() {

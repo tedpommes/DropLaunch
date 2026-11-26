@@ -165,7 +165,8 @@ export class Dropdown {
   }
 }
 
-// One place closes whatever dropdown is open: clicks elsewhere, resizing, scrolling.
+// One place closes whatever dropdown is open: clicks elsewhere, resizing, and scrolling what it's
+// in (that moves its button away). Other scrolling, like the console following new lines, doesn't.
 document.addEventListener("pointerdown", (e) => {
   if (openDropdown && !openDropdown.root.contains(e.target) && !openDropdown.list.contains(e.target)) openDropdown.close();
 });
@@ -174,7 +175,7 @@ window.addEventListener("blur", () => openDropdown?.close());
 document.addEventListener(
   "scroll",
   (e) => {
-    if (openDropdown && !openDropdown.list.contains(e.target)) openDropdown.close();
+    if (openDropdown && !openDropdown.list.contains(e.target) && e.target.contains?.(openDropdown.root)) openDropdown.close();
   },
   true,
 );

@@ -1,7 +1,7 @@
 //! Watches the active maps folder, like v1 did: the map list follows maps that are added,
 //! removed or renamed there, and a map that's saved (a RustEdit save, a re-export) is announced
-//! so it can be started with one click. Only this folder is watched, not the folders other
-//! maps in the history came from.
+//! so it can be started with one click. Only this folder is watched (and one more, when one is set
+//! in Settings › Advanced: a second watcher), not the folders other maps in the history came from.
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
@@ -137,6 +137,21 @@ impl MapWatcher {
             let old = inner.watcher.take();
             self.start(&mut inner);
             old
+        };
+        // Dropped outside the lock (it waits for its thread).
+        drop(old);
+    }
+
+    /// Stop watching (the folder was taken out of the settings).
+    pub fn unwatch(&self) {
+        let old = {
+            let mut inner = self.inner.locked();
+            inner.wanted += 1;
+            inner.dir = None;
+            inner.known.clear();
+            inner.pending.clear();
+            inner.retry_at = None;
+            inner.watcher.take()
         };
         // Dropped outside the lock (it waits for its thread).
         drop(old);

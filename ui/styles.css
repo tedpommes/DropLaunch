@@ -928,6 +928,65 @@ code {
   z-index: 11;
 }
 
+/* A toast that leads somewhere (what it's about): a button with an arrow. */
+.toast.leads {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.toast.leads:hover {
+  border-color: rgb(var(--accent-rgb) / 0.6);
+  background: color-mix(in srgb, var(--accent) 8%, var(--popup));
+}
+
+.toast.leads:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.toast .toast-go {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+  transition: transform 0.15s;
+}
+
+.toast.leads:hover .toast-go {
+  transform: translateX(2px);
+}
+
+/* Where a toast led: outlined for a moment. */
+.pointed {
+  animation: pointed 1.8s ease-out;
+}
+
+@keyframes pointed {
+  0%,
+  45% {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  100% {
+    outline: 2px solid transparent;
+    outline-offset: 3px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pointed {
+    animation-duration: 2.4s;
+  }
+
+  .toast.leads:hover .toast-go {
+    transform: none;
+  }
+}
+
 /* ---------- setup banner + test server card ---------- */
 .setup-banner {
   display: flex;
@@ -1034,8 +1093,10 @@ code {
   margin-bottom: 14px;
 }
 
-/* First start: the logo and the question centred on top. */
-.welcome .setup-hero {
+/* First start: the logo and the question centred on top. Also a setup that worked ("DropLaunch is
+   ready"). */
+.welcome .setup-hero,
+.setup.finished .setup-hero {
   flex-direction: column;
   gap: 10px;
   margin-bottom: 18px;
@@ -1709,23 +1770,6 @@ code {
   display: block;
 }
 
-.setup-log {
-  margin-top: 12px;
-  padding: 8px 12px;
-  border-radius: 10px;
-  background: var(--console);
-  border: 1px solid var(--line);
-  font: 11.5px/1.55 var(--mono);
-  color: var(--text-dim);
-  height: calc(5 * 1.55em + 16px);
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.setup-log div {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 
 .setup-result {
   display: flex;
@@ -1801,6 +1845,8 @@ kbd {
   align-items: center;
   gap: 10px;
   margin-top: 16px;
+  /* As tall as its big buttons: the row doesn't jump when Next takes the checkbox's place. */
+  min-height: 42px;
 }
 
 .btn-lg {
@@ -3522,10 +3568,9 @@ a.ext-link:hover {
   justify-content: center;
 }
 
-/* Continue when done, next to Cancel while it runs. */
+/* Continue when done, on the right while it runs (Next takes its place once it's done). */
 .check.setup-auto {
   align-items: center;
-  margin-right: 6px;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -4132,7 +4177,8 @@ button.map-group:focus-visible {
   opacity: 0.85;
 }
 
-.group-maps .group-icon {
+.group-maps .group-icon,
+.group-watched .group-icon {
   color: var(--accent);
 }
 
@@ -4587,17 +4633,65 @@ body.resizing-x * {
 }
 
 .app-update-notes {
-  max-height: 34vh;
+  max-height: 44vh;
   overflow-y: auto;
   margin: 0 0 12px;
-  padding: 12px 14px;
+  padding: 12px 16px;
   border-radius: 12px;
   border: 1px solid var(--line);
   background: var(--inset);
   font-size: 12.5px;
-  line-height: 1.55;
-  white-space: pre-line;
+  line-height: 1.5;
   color: var(--text);
+}
+
+/* a group of changes ("Safer", "Fixed") */
+.app-update-notes h3 {
+  margin: 16px 0 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.app-update-notes h3:first-child {
+  margin-top: 2px;
+}
+
+.app-update-notes p {
+  margin: 8px 0;
+  color: var(--muted);
+}
+
+.app-update-notes ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* wrapped lines start under the text, not under the dot */
+.app-update-notes li {
+  position: relative;
+  padding-left: 15px;
+}
+
+.app-update-notes li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.6em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.app-update-notes strong {
+  font-weight: 600;
+  color: var(--text-strong);
 }
 
 .app-update-notes[hidden] {
@@ -8828,6 +8922,107 @@ body.simple .bugs-card {
   flex: 1 1 220px;
 }
 
+/* The SteamCMD update command (Settings > Servers). */
+.cmd {
+  display: grid;
+  gap: 10px;
+  padding: 14px 18px 16px;
+  border-top: 1px solid var(--line);
+}
+
+.cmd-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.cmd-head .set-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.cmd-tag {
+  flex: none;
+  margin-top: 1px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: rgb(var(--overlay-rgb) / 0.06);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.cmd-tag.own {
+  background: color-mix(in srgb, var(--tone) 18%, transparent);
+  color: var(--tone);
+}
+
+.cmd-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.cmd-exe {
+  flex: none;
+  padding: 8px 0 0;
+  background: none;
+  font: 12.5px var(--mono);
+  color: var(--muted);
+}
+
+.cmd-input {
+  flex: 1;
+  min-width: 0;
+  height: auto;
+  padding: 7px 12px;
+  line-height: 1.5;
+  resize: vertical;
+  overflow-wrap: anywhere;
+}
+
+.cmd-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cmd-actions .set-note {
+  flex: 1 1 220px;
+}
+
+/* Settings > Advanced: a value box that starts its card has no line above it, and a row that has
+   nothing to do (the plugin wasn't changed) doesn't light up. */
+.set-card > .cmd:first-child {
+  border-top: 0;
+}
+
+.set-action:disabled {
+  cursor: default;
+}
+
+.set-action:disabled:hover {
+  background: none;
+}
+
+.set-action:disabled .set-go {
+  opacity: 0.35;
+  transform: none;
+}
+
+.set-action:disabled:hover .set-go {
+  background: none;
+  color: inherit;
+}
+
+.set-lead-note {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 /* "Built in": what comes with DropLaunch (the procedural map's start file, English, Basic Build Kit). */
 .builtin-tag {
   flex: none;
@@ -8866,4 +9061,317 @@ body.simple .bugs-card {
 .set-row.set-danger .set-title,
 .set-row.set-danger .set-go {
   color: var(--danger);
+}
+
+/* ---------- add-ons (addons.js): their tabs, cards and Settings rows ---------- */
+.addon-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 18px 22px;
+}
+
+.addon-page {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.addon-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  /* The same as the page in the frame (the SDK sets it from the theme): else it's painted opaque. */
+  color-scheme: dark;
+}
+
+:root[data-mode="light"] .addon-frame {
+  color-scheme: light;
+}
+
+/* A card in the side column, made like Bug reports. */
+.addon-card {
+  --tone: var(--violet);
+  flex: none;
+}
+
+.card.foldable.addon-card > .card-head {
+  align-items: center;
+  gap: 10px;
+}
+
+.card.foldable.addon-card > .card-head > :first-child {
+  flex: none;
+}
+
+.addon-card .card-head h2 {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.addon-card-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: linear-gradient(150deg, color-mix(in srgb, var(--tone) 32%, transparent), color-mix(in srgb, var(--tone) 10%, transparent));
+  color: var(--tone);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 38%, transparent);
+}
+
+.addon-card-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.addon-card-body {
+  overflow: hidden;
+  border-radius: 10px;
+}
+
+body.simple .addon-card {
+  display: none;
+}
+
+.tabs .tab-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgb(var(--accent-rgb) / 0.18);
+  color: var(--accent-text);
+  font: 700 11px/18px var(--font);
+  font-style: normal;
+  text-align: center;
+}
+
+.tabs .tab-badge:empty {
+  display: none;
+}
+
+/* The install dialog: who made it and what it may do. */
+.addon-by {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.addon-may {
+  margin: 12px 0 6px;
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.addon-perms {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.addon-perms li {
+  position: relative;
+  padding-left: 16px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.addon-perms li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.6em;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.addon-perms li.strong {
+  color: var(--text-strong);
+}
+
+.addon-perms li.strong::before {
+  background: var(--warn);
+}
+
+/* An update: what it may do that the old one couldn't. */
+.addon-perms li.new,
+.addon-may.new {
+  color: var(--text-strong);
+  font-weight: 700;
+}
+
+.addon-perms li.new::before {
+  background: var(--accent);
+}
+
+/* An update whose name or maker changed. */
+.addon-warn {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--text-strong);
+  font-size: 12.5px;
+}
+
+.addon-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* A page that didn't start: a note in its place. */
+.addon-page,
+.addon-card-body {
+  position: relative;
+}
+
+.addon-stuck {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  background: var(--card);
+  text-align: center;
+}
+
+.addon-stuck p {
+  margin: 0;
+  max-width: 42ch;
+}
+
+/* Settings → Add-ons. */
+.settings-page [data-tone="coral"] {
+  --tone: var(--coral);
+}
+
+.addon-list {
+  display: grid;
+  gap: 10px;
+}
+
+.addon-row {
+  padding: 14px 18px;
+  gap: 10px;
+}
+
+.addon-row.off .addon-row-icon,
+.addon-row.off .set-title {
+  opacity: 0.55;
+}
+
+.addon-row-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  cursor: pointer;
+}
+
+.addon-row-icon {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: linear-gradient(150deg, color-mix(in srgb, var(--tone) 32%, transparent), color-mix(in srgb, var(--tone) 10%, transparent));
+  color: var(--tone);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone) 38%, transparent);
+}
+
+.addon-row-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.addon-desc,
+.addon-problem {
+  margin: 0;
+}
+
+.addon-problem {
+  color: var(--danger-text);
+  font-size: 12.5px;
+}
+
+.addon-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.addon-chip {
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  font-size: 11.5px;
+  cursor: help;
+}
+
+.addon-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.addon-empty {
+  padding: 16px 18px;
+}
+
+/* Settings › Add-ons: a .dladdon found next to DropLaunch.exe or in Add-ons, not added yet. */
+.addon-found {
+  border-style: dashed;
+}
+
+.addon-found .addon-row-head {
+  cursor: default;
+}
+
+.addon-file {
+  overflow-wrap: anywhere;
+}
+
+.addon-empty p {
+  margin: 0;
+}
+
+/* Settings › Advanced: a script's OK it / Run now. */
+.set-acts {
+  flex: none;
+  display: flex;
+  gap: 6px;
+}
+
+.set-acts:empty {
+  display: none;
+}
+
+/* What a script printed (Run now). */
+.hook-output {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgb(var(--overlay-rgb) / 0.05);
+  font: 12px/1.5 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
 }

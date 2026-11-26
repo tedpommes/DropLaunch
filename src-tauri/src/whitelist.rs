@@ -37,9 +37,34 @@ pub fn write(server_dir: &Path, ids: Option<&[String]>) -> std::io::Result<()> {
         if let Some(dir) = file.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(&file, &text)?;
+        write_whole(&file, &text)?;
     }
     Ok(())
+}
+
+/// Writes a file the plugin reads while the server runs (the whitelist, the key): whole or not at
+/// all, through a file next to it. Written in place, it would be empty for a moment, and a login
+/// checked in that moment would read a broken whitelist.
+pub fn write_whole(file: &Path, text: &str) -> std::io::Result<()> {
+    let mut partial = file.as_os_str().to_owned();
+    partial.push(".part");
+    let partial = PathBuf::from(partial);
+    std::fs::write(&partial, text)?;
+    // The plugin may be reading the old one right now, which holds it for a moment.
+    let mut tries = 0;
+    loop {
+        match std::fs::rename(&partial, file) {
+            Ok(()) => return Ok(()),
+            Err(_) if tries < 5 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(40));
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&partial);
+                return Err(e);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

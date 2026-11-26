@@ -13,3 +13,7 @@ droplaunch.json
 /dev/
 /MAINTAINING.md
 /.claude/
+# add-ons being made stay on this PC: only the SDK, the guide and pack_addon.py go up
+/addons/*/
+!/addons/_sdk/
+*.dladdon

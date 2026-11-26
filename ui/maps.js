@@ -1,7 +1,7 @@
 // Maps page: the map list (the procedural map, the active maps folder + subfolders, the history
 // of started maps), selection, starting a server with a map, files dropped on the window or exe,
 // and maps saved in the active folder (DropLaunch watches it, like v1).
-import { $, el, icon, invoke, fmtBytes, fmtWhen, toast, confirmDialog, copyText, desktopNotify, onNotificationClick } from "./util.js";
+import { $, el, icon, invoke, fmtBytes, fmtWhen, toast, confirmDialog, copyText, desktopNotify, onNotificationClick, pointAt, holdDuringPress } from "./util.js";
 import { contextMenu } from "./menu.js";
 import { readPicture } from "./mapcanvas.js";
 import { t, tn, richn } from "./i18n.js";
@@ -34,6 +34,7 @@ const store = {
 /** A language file (checked properly when it's added). */
 /** A theme, language or kit file. */
 const isJsonFile = (path) => /\.json$/i.test(path);
+const isAddonFile = (path) => /\.dladdon$/i.test(path);
 /** A start file (checked properly when it's added). */
 export const isStartFile = (path) => /\.(bat|cmd|sh)$/i.test(path);
 /** What the backend starts for an entry of the list. */
@@ -86,12 +87,12 @@ export function initMaps(ctx) {
   const presets = () => (list.presets ?? []).map(presetEntry);
 
   function allEntries() {
-    return [procgenEntry(), ...presets(), ...list.maps, ...list.history];
+    return [procgenEntry(), ...presets(), ...list.maps, ...(list.watched ?? []), ...list.history];
   }
 
   /** The entry a row shows (the same map can be in the Maps folder and the history). */
   function entryFor(node) {
-    const groups = { history: list.history, maps: list.maps, presets: presets() };
+    const groups = { history: list.history, maps: list.maps, watched: list.watched ?? [], presets: presets() };
     const from = groups[node.dataset.group] ?? [procgenEntry()];
     return from.find((m) => m.path === node.dataset.path) ?? allEntries().find((m) => m.path === node.dataset.path);
   }
@@ -219,8 +220,10 @@ export function initMaps(ctx) {
 
   function row(m, groupKey) {
     const isRunning = samePath(runningPath(), m.path);
-    // Just saved or added in the active folder: marked here, with one click to (re)start it.
-    const fresh = groupKey === "maps" && saved && samePath(saved.path, m.path) ? saved : null;
+    // Just saved or added in the active folder (or the watched one): marked here, with one click
+    // to (re)start it.
+    const fresh = (groupKey === "maps" || groupKey === "watched") && saved && samePath(saved.path, m.path) ? saved : null;
+    const root = groupKey === "watched" ? (list.watchedDir ?? "").split(/[\\/]/).filter(Boolean).pop() : "Maps";
     const isSelected = m.path === selected;
     const history = groupKey === "history";
     const folder = m.outside ? m.folder : m.folder ? `Maps\\${m.folder}` : "Maps";
@@ -228,7 +231,7 @@ export function initMaps(ctx) {
       ? el("span", { class: "map-folder", text: m.file ? t("maps.procgen.metaFile", { seed: m.seed, size: m.size, file: m.file }) : t("maps.procgen.meta", { seed: m.seed, size: m.size }) })
       : history
         ? el("span", { class: "map-folder", text: [m.started ? t("maps.started", { when: fmtWhen(m.started) }) : null, folder].filter(Boolean).join(" · "), title: m.path })
-        : el("span", { class: "map-folder", text: m.folder || "Maps", title: m.outside ? m.folder : "" });
+        : el("span", { class: "map-folder", text: m.folder || root, title: m.outside ? m.folder : groupKey === "watched" ? list.watchedDir : "" });
     const node = el(
       "div",
       {
@@ -356,7 +359,7 @@ export function initMaps(ctx) {
   /** Searching shows every match, folded groups included. */
   const isOpen = (key) => Boolean(query) || !collapsed.has(key);
 
-  const GROUP_ICONS = { builtin: "terrain", presets: "file", maps: "folder", history: "history" };
+  const GROUP_ICONS = { builtin: "terrain", presets: "file", maps: "folder", watched: "folder-edit", history: "history" };
 
   /** A section of the list: its header (folds it away) and its rows. */
   function section(key, title, count, rows, extra) {
@@ -387,6 +390,8 @@ export function initMaps(ctx) {
 
   function render() {
     const box = $("map-list");
+    // Not under a row or ▶ being pressed: that click would be lost.
+    if (holdDuringPress(box, render)) return;
     const scroll = box.scrollTop;
     // The rows are made again: the old ones' icons needn't be watched.
     thumbObserver.disconnect();
@@ -407,6 +412,14 @@ export function initMaps(ctx) {
     // After Reset everything no maps folder is linked until setup has run.
     const linked = ctx.state?.linked !== false;
     if (linked) sections.push(section("maps", t("maps.group.folder"), list.maps.length, folderRows, watching));
+    // Settings › Advanced's watched folder.
+    if (linked && list.watchedDir) {
+      const watched = sorted(list.watched ?? []).filter(matches);
+      let rows = watched.map((m) => row(m, "watched"));
+      if (!rows.length) rows = [el("div", { class: "map-empty", text: list.watched?.length ? t("maps.noMatch", { query }) : t("maps.watched.empty") })];
+      const chip = el("span", { class: "watching", title: t("maps.watched.title", { dir: list.watchedDir }) }, el("i"), el("span", { text: t("folders.state.watching") }));
+      sections.push(section("watched", t("maps.group.watched"), list.watched?.length ?? 0, rows, chip));
+    }
     if (history.length) sections.push(section("history", t("maps.group.history"), history.length, history.map((m) => row(m, "history"))));
     box.replaceChildren(...sections);
     box.scrollTop = scroll;
@@ -454,7 +467,8 @@ export function initMaps(ctx) {
     if (!change?.saved || ctx.state?.notifySaves === false) return;
     saved = change.saved;
     // Its group opens and the row comes into view.
-    if (collapsed.delete("maps")) store.set(COLLAPSED_KEY, JSON.stringify([...collapsed]));
+    const inWatched = !list.maps.some((m) => samePath(m.path, saved.path)) && (list.watched ?? []).some((m) => samePath(m.path, saved.path));
+    if (collapsed.delete(inWatched ? "watched" : "maps")) store.set(COLLAPSED_KEY, JSON.stringify([...collapsed]));
     render();
     $("map-list").querySelector(".map-row.fresh")?.scrollIntoView({ block: "nearest" });
     // DropLaunch is in the background: flash its taskbar button, and a Windows notification
@@ -537,7 +551,8 @@ export function initMaps(ctx) {
     }
     // SteamCMD may be busy with another branch's folder: this one can start meanwhile.
     if (ctx.startBlocked()) {
-      toast(t("maps.blocked"));
+      // A click shows how far SteamCMD is (the bar above the maps).
+      toast(t("maps.blocked"), "", () => pointAt($("strip")));
       return;
     }
     const target = targetOf(m);
@@ -578,6 +593,29 @@ export function initMaps(ctx) {
         }
         break;
       }
+      case "script": {
+        // Your before_start.bat, new or changed since you OK'd it: seen before it runs.
+        const choice = await confirmDialog({
+          title: t(reply.changed ? "maps.script.changed" : "maps.script.new", { name: reply.name }),
+          text: [el("p", { text: t(reply.changed ? "maps.script.textChanged" : "maps.script.text") }), el("p", { class: "path", text: reply.path })],
+          choices: [
+            { label: t("maps.script.show"), value: "show" },
+            { label: t("maps.script.ok"), value: "run", danger: true },
+          ],
+        });
+        if (choice === "show") invoke("reveal", { path: reply.path }).catch((err) => toast(String(err), "error"));
+        else if (choice === "run") {
+          try {
+            await invoke("hook_approve", { name: reply.name });
+          } catch (err) {
+            toast(String(err), "error");
+            break;
+          }
+          await start(m, { prefab, replace, ignoreOxide });
+          return;
+        }
+        break;
+      }
       case "queued":
         toast(t("maps.queued", { title: reply.title, name }));
         break;
@@ -592,6 +630,8 @@ export function initMaps(ctx) {
   /** Files dropped on the window, or the exe was opened with (kit files go to the kits, theme
    * and language files to Settings, start files to the list or Settings). */
   async function openFiles(all) {
+    // Add-ons first (a .dladdon, or a folder with addon.json): each asks before it's added.
+    if ((all ?? []).some((p) => isAddonFile(p) || !/\.[^\\/]+$/.test(p))) all = await ctx.addons.fromFiles(all);
     let json = (all ?? []).filter(isJsonFile);
     const scripts = (all ?? []).filter(isStartFile);
     const paths = (all ?? []).filter((p) => !isJsonFile(p) && !isStartFile(p));
@@ -734,7 +774,11 @@ export function initMaps(ctx) {
         const usable = paths.filter((p) => /\.(map|zip)$/i.test(p) || !/\.[^\\/]+$/.test(p));
         const json = paths.filter(isJsonFile);
         const scripts = paths.filter(isStartFile);
-        if (json.length && !usable.length && !scripts.length) {
+        const addons = paths.filter(isAddonFile);
+        if (addons.length && !usable.length) {
+          $("drop-title").textContent = t("drop.addon");
+          $("drop-detail").textContent = t("drop.addon.detail");
+        } else if (json.length && !usable.length && !scripts.length) {
           $("drop-title").textContent = t("drop.json");
           $("drop-detail").textContent = t("drop.json.detail");
         } else if (scripts.length && !usable.length) {
@@ -744,7 +788,7 @@ export function initMaps(ctx) {
           $("drop-title").textContent = usable.length ? (usable.length > 1 ? t("drop.many", { n: usable.length }) : t("drop.start")) : t("drop.nope");
           $("drop-detail").textContent = usable.length ? t("drop.detail") : t("drop.nope.detail");
         }
-        overlay.classList.toggle("nope", !usable.length && !json.length && !scripts.length);
+        overlay.classList.toggle("nope", !usable.length && !json.length && !scripts.length && !addons.length);
       }
       overlay.hidden = false;
     } else if (type === "leave") {

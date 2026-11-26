@@ -45,7 +45,9 @@ fn main() {
     };
     let branch = positional.get(2).map(|s| s.to_string()).unwrap_or_else(|| "public".into());
     let base_dir = server_dir.parent().map(PathBuf::from).unwrap_or_else(|| server_dir.clone());
-    let req = UpdateRequest { base_dir, steamcmd_dir, server_dir, branch, validate: flag("--validate"), update_framework: false };
+    // No OK'd hook scripts here: an after_update script in the server folder is skipped.
+    let data_dir = std::env::temp_dir().join("droplaunch-steamcmd-live");
+    let req = UpdateRequest { base_dir, steamcmd_dir, server_dir, branch, validate: flag("--validate"), update_framework: false, command: Default::default(), data_dir };
     let summary = jobs::update_server(&req, &cancel, &mut print);
     println!("{}", serde_json::to_string_pretty(&summary).unwrap());
 }

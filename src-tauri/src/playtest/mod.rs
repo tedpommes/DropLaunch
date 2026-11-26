@@ -38,6 +38,12 @@ const PLAYERS_EVERY: Duration = Duration::from_secs(2);
 /// error, or the framework isn't running).
 const LOAD_GRACE: Duration = Duration::from_secs(90);
 const MAX_REPORTS: usize = 500;
+/// Reports one tester can send in an hour (the plugin has the same limit): one who sends them
+/// non-stop can't fill the list on their own.
+const PER_TESTER_HOUR: usize = 30;
+const HOUR_MS: i64 = 3_600_000;
+/// Testers that can be ignored, at most.
+const MAX_IGNORED: usize = 500;
 
 /// The JSON of a bug report in a server log line. `key`: the server folder's (`read_key`).
 pub fn report_json<'a>(line: &'a str, key: Option<&str>) -> Option<&'a str> {
@@ -88,7 +94,8 @@ pub fn new_key(server_dir: &Path) -> std::io::Result<Option<String>> {
     if let Some(dir) = file.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(&file, serde_json::json!({ "key": key }).to_string())?;
+    // (Whole or not at all: the plugin reads it while the server runs.)
+    crate::whitelist::write_whole(&file, &serde_json::json!({ "key": key }).to_string())?;
     Ok(Some(key))
 }
 
@@ -120,6 +127,13 @@ pub fn describe(json: &str) -> String {
     }
 }
 
+/// Text from a language file (someone else's, maybe) as it goes into a console command: without
+/// quotes, `;`, backslashes or control characters, which could end the command or start another.
+fn console_text(text: &str) -> String {
+    let kept: String = text.chars().filter(|c| !c.is_control() && !matches!(c, '"' | ';' | '\\')).take(200).collect();
+    kept.trim().to_string()
+}
+
 /// Where the plugin goes in a server folder (None: no Carbon or Oxide there).
 pub fn plugin_path(server_dir: &Path) -> Option<PathBuf> {
     match mods::detect(server_dir) {
@@ -129,8 +143,38 @@ pub fn plugin_path(server_dir: &Path) -> Option<PathBuf> {
     }
 }
 
+/// The plugin as DropLaunch writes it: with a last line that holds a hash of the rest, so a
+/// plugin you changed is told from one of DropLaunch's (of any version) and kept.
+fn stamped() -> String {
+    let body = if PLUGIN.ends_with('\n') { PLUGIN.to_string() } else { format!("{PLUGIN}\n") };
+    format!("{body}{STAMP} {:016x}). DropLaunch keeps this file once you change it; Settings > Advanced puts its own back.\n", fnv(&body))
+}
+
+const STAMP: &str = "// Written by DropLaunch (stamp";
+/// An edited plugin is kept as this while the plugin is out (the frameworks only load .cs files).
+const KEPT_EXT: &str = "cs.yours";
+
+use crate::advanced::hash as fnv;
+
+/// A plugin file you changed: not as DropLaunch wrote it (a file of an older DropLaunch without a
+/// stamp counts as DropLaunch's).
+fn edited(text: &str) -> bool {
+    let Some(at) = text.rfind(STAMP) else { return false };
+    let (body, stamp) = text.split_at(at);
+    let hash = stamp[STAMP.len()..].trim_start().get(..16).and_then(|h| u64::from_str_radix(h, 16).ok());
+    hash != Some(fnv(body))
+}
+
+/// The plugin in this server folder is one you changed (DropLaunch leaves it as it is).
+pub fn plugin_edited(server_dir: &Path) -> bool {
+    let Some(path) = plugin_path(server_dir) else { return false };
+    let text = std::fs::read_to_string(&path).or_else(|_| std::fs::read_to_string(path.with_extension(KEPT_EXT)));
+    text.is_ok_and(|text| edited(&text))
+}
+
 /// Put the plugin in the server's plugins folder (Carbon and Oxide load new files there by
-/// themselves, also while the server runs). None: no framework to run it.
+/// themselves, also while the server runs). A plugin you changed stays as it is (and one kept
+/// while the plugin was out comes back). None: no framework to run it.
 pub fn install_plugin(server_dir: &Path) -> std::io::Result<Option<PathBuf>> {
     let Some(path) = plugin_path(server_dir) else { return Ok(None) };
     // A key first, for a server that runs without one (started before DropLaunch was updated):
@@ -138,20 +182,49 @@ pub fn install_plugin(server_dir: &Path) -> std::io::Result<Option<PathBuf>> {
     if read_key(server_dir).is_none() {
         new_key(server_dir)?;
     }
-    if std::fs::read_to_string(&path).is_ok_and(|text| text == PLUGIN) {
+    let kept = path.with_extension(KEPT_EXT);
+    if !path.exists() && kept.is_file() {
+        std::fs::rename(&kept, &path)?;
+    }
+    let text = std::fs::read_to_string(&path).ok();
+    if text.as_deref().is_some_and(|text| text == stamped() || edited(text)) {
         return Ok(Some(path));
     }
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(&path, PLUGIN)?;
+    std::fs::write(&path, stamped())?;
     Ok(Some(path))
 }
 
-/// Take the plugin out again (the frameworks unload a removed file).
+/// DropLaunch's own plugin back in place of one you changed (in the servers that have the plugin
+/// in, or kept). How many were put back.
+pub fn restore_plugin(server_dirs: &[PathBuf]) -> std::io::Result<usize> {
+    let mut restored = 0;
+    for dir in server_dirs {
+        let Some(path) = plugin_path(dir) else { continue };
+        let kept = path.with_extension(KEPT_EXT);
+        if path.is_file() && std::fs::read_to_string(&path).is_ok_and(|t| edited(&t)) {
+            std::fs::write(&path, stamped())?;
+            restored += 1;
+        }
+        if kept.is_file() {
+            std::fs::remove_file(&kept)?;
+            restored += usize::from(!path.is_file());
+        }
+    }
+    Ok(restored)
+}
+
+/// Take the plugin out again (the frameworks unload a removed file). One you changed is kept
+/// next to it as `.cs.yours`, and goes back in with the plugin.
 pub fn remove_plugin(server_dir: &Path) {
     for framework in ["carbon", "oxide"] {
-        let _ = std::fs::remove_file(server_dir.join(framework).join("plugins").join(PLUGIN_FILE));
+        let path = server_dir.join(framework).join("plugins").join(PLUGIN_FILE);
+        if std::fs::read_to_string(&path).is_ok_and(|t| edited(&t)) {
+            let _ = std::fs::rename(&path, path.with_extension(KEPT_EXT));
+        }
+        let _ = std::fs::remove_file(path);
     }
 }
 
@@ -212,6 +285,31 @@ pub struct Report {
     /// The map file (version) it was reported on.
     pub version: String,
     pub fixed: Option<Fixed>,
+    /// How many more times the same text was reported at the same spot (folded into this one).
+    #[serde(default)]
+    pub repeats: u32,
+    /// Who sent those, the last `MAX_ALSO` of them.
+    #[serde(default)]
+    pub also: Vec<Also>,
+}
+
+/// Someone who reported the same thing again.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Also {
+    pub name: String,
+    pub steam_id: String,
+    pub time: i64,
+}
+
+/// Reports of the same text this close (metres, on the map) are one report.
+const SAME_SPOT: f32 = 15.0;
+/// Names kept of those who sent a report again.
+const MAX_ALSO: usize = 20;
+
+/// A report's text as it's compared: lower case, spaces as one, without ending punctuation.
+fn same_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase().trim_end_matches(['.', '!', '?', ' ']).to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -228,6 +326,8 @@ pub struct Fixed {
 pub struct ReportsSummary {
     pub reports: usize,
     pub maps: usize,
+    /// Testers whose reports are left out.
+    pub ignored: usize,
 }
 
 /// A map's reports, kept on disk, and the names of its monuments (per version of the map).
@@ -261,15 +361,46 @@ struct VersionMonuments {
 const MONUMENT_VERSIONS: usize = 6;
 
 impl Book {
-    /// Reports from the plugin (their JSON) into the book, numbered, the oldest dropped past
-    /// MAX_REPORTS. None: nothing new; else who to thank (Steam ID, report number).
-    fn file(&mut self, raw: Vec<String>, version: &str) -> Option<Vec<(String, u32)>> {
+    /// Reports from the plugin (their JSON) into the book, numbered, past MAX_REPORTS the ones
+    /// `trim` picks dropped. Testers in `ignored`, and one who sent PER_TESTER_HOUR in the last
+    /// hour, are left out. None: nothing new; else who to thank (Steam ID, report number).
+    fn file(&mut self, raw: Vec<String>, version: &str, ignored: &[String]) -> Option<Vec<(String, u32)>> {
         let mut thanks = Vec::new();
         let mut added = false;
         for json in raw {
             let Ok(r) = serde_json::from_str::<Incoming>(&json) else { continue };
             if r.id.is_empty() || self.reports.iter().any(|old| old.id == r.id) {
                 continue;
+            }
+            let steam_id: String = r.steam_id.chars().filter(char::is_ascii_digit).take(20).collect();
+            if ignored.contains(&steam_id) && !steam_id.is_empty() {
+                continue;
+            }
+            let name: String = r.name.chars().filter(|c| !c.is_control()).take(40).collect();
+            // The same text at the same spot as an open report: counted there, not listed again
+            // (everyone who walks past the same broken rock reports it).
+            let text = same_text(&r.text);
+            let repeat = (!text.is_empty())
+                .then(|| self.reports.iter_mut().find(|old| old.fixed.is_none() && same_text(&old.text) == text && (old.x - r.x).hypot(old.z - r.z) <= SAME_SPOT))
+                .flatten();
+            if let Some(old) = repeat {
+                old.repeats = old.repeats.saturating_add(1);
+                old.also.push(Also { name, steam_id: steam_id.clone(), time: report_time(&r.id).unwrap_or_else(now_ms) });
+                if old.also.len() > MAX_ALSO {
+                    old.also.remove(0);
+                }
+                if !steam_id.is_empty() {
+                    thanks.push((steam_id, old.n));
+                }
+                added = true;
+                continue;
+            }
+            if !steam_id.is_empty() {
+                let since = now_ms() - HOUR_MS;
+                let lately = self.reports.iter().filter(|old| old.steam_id == steam_id && old.time > since).count();
+                if lately >= PER_TESTER_HOUR {
+                    continue;
+                }
             }
             // Each map numbers its own reports; with none left (all deleted or cleared) the
             // next one is #1 again.
@@ -278,7 +409,6 @@ impl Book {
             }
             self.next += 1;
             let n = self.next;
-            let steam_id: String = r.steam_id.chars().filter(char::is_ascii_digit).take(20).collect();
             if !steam_id.is_empty() {
                 thanks.push((steam_id.clone(), n));
             }
@@ -287,7 +417,7 @@ impl Book {
                 id: r.id,
                 n,
                 text: r.text.chars().take(300).collect(),
-                name: r.name.chars().filter(|c| !c.is_control()).take(40).collect(),
+                name,
                 steam_id,
                 grid: r.grid.chars().take(8).collect(),
                 x: r.x,
@@ -303,12 +433,32 @@ impl Book {
                 look_distance: r.look_distance,
                 version: version.to_string(),
                 fixed: None,
+                repeats: 0,
+                also: Vec::new(),
             });
             added = true;
         }
-        let extra = self.reports.len().saturating_sub(MAX_REPORTS);
-        self.reports.drain(..extra);
+        self.trim();
         added.then_some(thanks)
+    }
+
+    /// Past MAX_REPORTS: the oldest fixed report goes first, else the oldest of whoever sent the
+    /// most (so one tester can't push everyone else's reports out).
+    fn trim(&mut self) {
+        while self.reports.len() > MAX_REPORTS {
+            let at = match self.reports.iter().position(|r| r.fixed.is_some()) {
+                Some(at) => at,
+                None => {
+                    let mut sent: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+                    for r in &self.reports {
+                        *sent.entry(r.steam_id.as_str()).or_default() += 1;
+                    }
+                    let most = sent.values().copied().max().unwrap_or(0);
+                    self.reports.iter().position(|r| sent[r.steam_id.as_str()] == most).unwrap_or(0)
+                }
+            };
+            self.reports.remove(at);
+        }
     }
 
     /// The names for this version of the map, else the newest known (monuments rarely move).
@@ -469,6 +619,8 @@ pub struct PlaytestView {
     pub grid: Option<GridInfo>,
     /// The world's size in metres, as the server tells it.
     pub size: Option<f32>,
+    /// The whitelist is on, but the plugin that checks it doesn't answer: anyone can join.
+    pub whitelist_open: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -518,6 +670,11 @@ struct State {
     players: Vec<Player>,
     grid: Option<GridInfo>,
     size: Option<f32>,
+    /// Since when the server is ready without the plugin answering (None: it answers, or the
+    /// server isn't ready).
+    silent_since: Option<Instant>,
+    /// The console said the whitelist isn't working on this server (once, until it works again).
+    whitelist_warned: bool,
 }
 
 #[derive(Clone)]
@@ -586,14 +743,21 @@ impl Playtest {
     /// that's gone means none.
     fn follow_plugin_file(&self) {
         let live = self.server.live_dir();
-        // The disk is looked at from a copy of the settings, not while holding them.
-        let settings = self.store.locked().clone();
-        if !settings.config.linked {
+        let (linked, playtest) = {
+            let store = self.store.locked();
+            (store.config.linked, store.config.playtest)
+        };
+        if !linked {
             return;
         }
-        let dir = live.unwrap_or_else(|| settings.server_dir());
+        // The disk is looked at without holding the settings: the server folder in use comes from
+        // a copy of them (only when no server runs; this is twice a second).
+        let dir = live.unwrap_or_else(|| {
+            let settings = self.store.locked().clone();
+            settings.server_dir()
+        });
         let present = plugin_path(&dir).is_some_and(|p| p.is_file());
-        if settings.config.playtest != present {
+        if playtest != present {
             let mut store = self.store.locked();
             store.config.playtest = present;
             let _ = store.save();
@@ -611,9 +775,39 @@ impl Playtest {
         self.follow(server.as_ref(), self.plugin_wanted());
     }
 
+    /// The whitelist is only as good as the plugin that checks it: Rust has none of its own. When
+    /// the plugin doesn't answer on a ready server (it didn't compile after a Rust update, Carbon
+    /// or Oxide didn't start…), anyone can join, so the console says it, loud and once; and again
+    /// when it works after all. (No Carbon or Oxide at all is said when the server starts.)
+    fn watch_whitelist(&self) {
+        let whitelisted = self.store.locked().config.whitelist_ids().is_some();
+        let say = {
+            let mut st = self.inner.locked();
+            let ready = st.server.as_ref().is_some_and(|s| s.phase == "ready");
+            let silent = ready && !st.answered && st.framework.is_some_and(|f| f != Framework::None);
+            if !silent {
+                st.silent_since = None;
+                // It answers now: the whitelist is checked again.
+                (ready && st.answered && std::mem::take(&mut st.whitelist_warned) && whitelisted).then(|| (t!("serverlog.whitelistWorking"), "app"))
+            } else {
+                let since = *st.silent_since.get_or_insert_with(Instant::now);
+                if whitelisted && !st.whitelist_warned && since.elapsed() > LOAD_GRACE {
+                    st.whitelist_warned = true;
+                    Some((t!("serverlog.whitelistNotWorking"), "error"))
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some((text, kind)) = say {
+            self.server.note(text, kind);
+        }
+    }
+
     fn tick(&self) {
         let server = self.server.playtest_server();
         self.follow(server.as_ref(), self.plugin_wanted());
+        self.watch_whitelist();
         self.follow_plugin_file();
         let enabled = self.enabled();
         self.save_game_kits();
@@ -691,6 +885,8 @@ impl Playtest {
                 st.answered = false;
                 st.monuments_asked = false;
                 st.ready_since = None;
+                st.silent_since = None;
+                st.whitelist_warned = false;
                 st.last_players = None;
                 st.players.clear();
                 st.framework = None;
@@ -780,18 +976,59 @@ impl Playtest {
                 st.map = Some(map);
             }
         }
-        let thanks = {
+        let ignored = self.store.locked().config.ignored_testers.clone();
+        let (thanks, new) = {
             let mut st = self.inner.locked();
             let Some(version) = st.map.as_ref().map(|m| m.version.clone()) else { return };
-            let Some(thanks) = st.book.file(raw, &version) else { return };
+            let before: std::collections::HashSet<String> = st.book.reports.iter().map(|r| r.id.clone()).collect();
+            let Some(thanks) = st.book.file(raw, &version, &ignored) else { return };
             // Saved right away, also when nobody gets a thank-you (a report without a Steam ID).
             self.save(&st);
-            thanks
+            let new: Vec<Report> = st.book.reports.iter().filter(|r| !before.contains(&r.id)).cloned().collect();
+            (thanks, new)
         };
+        // Add-ons that may see reports hear of each new one (ui/addons.js).
+        if let Some(app) = self.app.get().filter(|_| !new.is_empty()) {
+            let _ = app.emit("bug-reports", &new);
+        }
         // The tester sees it arrived (only players on this server, through RCON).
         for (steam_id, n) in thanks {
-            self.server.rcon_send(&format!("droplaunch.tell {steam_id} {}", t!("bug.thanks", n)));
+            self.server.rcon_send(&format!("droplaunch.tell {steam_id} {}", console_text(&t!("bug.thanks", n))));
         }
+    }
+
+    /// Leave a tester's bug reports out from now on, and take out the open ones they sent in the
+    /// last hour (one who floods the list). Settings › Bug reports lets them in again.
+    pub fn ignore(&self, steam_id: &str) -> Result<PlaytestView, String> {
+        if steam_id.is_empty() || steam_id.len() > 20 || !steam_id.chars().all(|c| c.is_ascii_digit()) {
+            return Err(t!("bug.error.notTester"));
+        }
+        {
+            let mut store = self.store.locked();
+            let list = &mut store.config.ignored_testers;
+            if !list.iter().any(|id| id == steam_id) {
+                if list.len() >= MAX_IGNORED {
+                    list.remove(0);
+                }
+                list.push(steam_id.to_string());
+                store.save().map_err(|e| t!("error.saveSettings", error = e))?;
+            }
+        }
+        {
+            let mut st = self.inner.locked();
+            let since = now_ms() - HOUR_MS;
+            st.book.reports.retain(|r| r.steam_id != steam_id || r.time <= since || r.fixed.is_some());
+            self.save(&st);
+        }
+        Ok(self.view())
+    }
+
+    /// Every ignored tester's reports are taken again. How many testers that was.
+    pub fn unignore_all(&self) -> Result<usize, String> {
+        let mut store = self.store.locked();
+        let n = std::mem::take(&mut store.config.ignored_testers).len();
+        store.save().map_err(|e| t!("error.saveSettings", error = e))?;
+        Ok(n)
     }
 
     fn poll_players(&self, server_id: u64) {
@@ -842,6 +1079,7 @@ impl Playtest {
             monuments: st.map.as_ref().map(|m| st.book.monuments_for(&m.version)).unwrap_or_default(),
             grid: st.grid.clone(),
             size: st.size,
+            whitelist_open: st.whitelist_warned,
         }
     }
 
@@ -868,7 +1106,7 @@ impl Playtest {
             let st = self.inner.locked();
             (st.map.as_ref().map(|m| m.key.clone()), st.book.reports.len())
         };
-        let mut out = ReportsSummary::default();
+        let mut out = ReportsSummary { ignored: self.store.locked().config.ignored_testers.len(), ..Default::default() };
         for (key, book) in self.books() {
             let n = if current.as_deref() == Some(key.as_str()) { in_memory } else { book.reports.len() };
             if n > 0 {
@@ -1160,12 +1398,99 @@ mod tests {
     #[test]
     fn reports_are_filed_with_or_without_a_steam_id() {
         let mut book = Book::default();
-        let thanks = book.file(vec![r#"{"id":"1","name":"Console","text":"a rock floats"}"#.into()], "Island_v2.map");
+        let thanks = book.file(vec![r#"{"id":"1","name":"Console","text":"a rock floats"}"#.into()], "Island_v2.map", &[]);
         assert_eq!(thanks, Some(Vec::new()));
-        let thanks = book.file(vec![r#"{"id":"2","steamId":"7656119800000000x1","text":"hole"}"#.into(), "not json".into()], "Island_v2.map");
+        let thanks = book.file(vec![r#"{"id":"2","steamId":"7656119800000000x1","text":"hole"}"#.into(), "not json".into()], "Island_v2.map", &[]);
         assert_eq!(thanks, Some(vec![("76561198000000001".to_string(), 2)]));
-        assert_eq!(book.file(vec![r#"{"id":"2","text":"hole"}"#.into()], "Island_v2.map"), None, "seen before");
+        assert_eq!(book.file(vec![r#"{"id":"2","text":"hole"}"#.into()], "Island_v2.map", &[]), None, "seen before");
         assert_eq!(book.reports.iter().map(|r| (r.n, r.text.as_str())).collect::<Vec<_>>(), [(1, "a rock floats"), (2, "hole")]);
+    }
+
+    /// Third sweep, 5.7: the same text at the same spot is one report with a count (and the names
+    /// of who sent it again), not a new one each time.
+    #[test]
+    fn the_same_report_at_the_same_spot_is_counted_once() {
+        let report = |id: &str, steam: &str, name: &str, text: &str, x: f32| format!(r#"{{"id":"{id}","steamId":"{steam}","name":"{name}","text":"{text}","x":{x},"z":0}}"#);
+        let mut book = Book::default();
+        book.file(vec![report("a", "76561198000000001", "Ann", "Floating rock here", 100.0)], "Island.map", &[]);
+        // Same words (other case, spaces, a full stop), 10 m away: folded, and thanked as #1.
+        let thanks = book.file(vec![report("b", "76561198000000002", "Bob", "floating  rock here.", 110.0)], "Island.map", &[]).unwrap();
+        assert_eq!(thanks, [("76561198000000002".to_string(), 1)]);
+        assert_eq!(book.reports.len(), 1);
+        assert_eq!(book.reports[0].repeats, 1);
+        assert_eq!(book.reports[0].also[0].name, "Bob");
+        // Too far away, or other words: a report of its own.
+        book.file(vec![report("c", "76561198000000003", "Cy", "Floating rock here", 300.0), report("d", "76561198000000003", "Cy", "Floating tree here", 100.0)], "Island.map", &[]);
+        assert_eq!(book.reports.len(), 3);
+        // A fixed one isn't added to: it came back.
+        book.reports[0].fixed = Some(Fixed { time: 1, version: String::new() });
+        book.file(vec![report("e", "76561198000000002", "Bob", "Floating rock here", 100.0)], "Island.map", &[]);
+        assert_eq!(book.reports.len(), 4);
+        assert_eq!(book.reports[0].repeats, 1);
+        // Names kept: the last MAX_ALSO.
+        let many: Vec<String> = (0..30).map(|n| report(&format!("m{n}"), "76561198000000009", &format!("T{n}"), "Floating rock here", 100.0)).collect();
+        book.file(many, "Island.map", &[]);
+        let open = book.reports.iter().find(|r| r.id == "e").unwrap();
+        assert_eq!((open.repeats, open.also.len()), (30, MAX_ALSO));
+        assert_eq!(open.also.last().unwrap().name, "T29");
+    }
+
+    /// Third sweep, S7: one tester sending /bug non-stop can't push everyone else's reports out.
+    /// They're held to PER_TESTER_HOUR an hour, an ignored one is left out, and when the list is
+    /// full the oldest fixed report goes first, then the oldest of whoever sent the most.
+    #[test]
+    fn one_tester_cannot_fill_the_list() {
+        let report = |id: usize, steam: &str| format!(r#"{{"id":"r{id}","steamId":"{steam}","text":"report {id}"}}"#);
+        let mut book = Book::default();
+        book.file(vec![report(0, "76561198000000001")], "Island.map", &[]);
+        let flood: Vec<String> = (1..=100).map(|n| report(n, "76561198000000002")).collect();
+        let thanks = book.file(flood, "Island.map", &[]).unwrap();
+        assert_eq!(thanks.len(), PER_TESTER_HOUR, "an hour's worth, no more");
+        assert_eq!(book.reports.len(), 1 + PER_TESTER_HOUR);
+        assert_eq!(book.file(vec![report(200, "76561198000000003")], "Island.map", &["76561198000000003".into()]), None, "ignored");
+
+        // An older list that is full (reports from before the limit, or older than an hour).
+        let mut book = Book::default();
+        let old = |n: usize, steam: &str, fixed: bool| Report {
+            id: format!("o{n}"),
+            n: n as u32,
+            text: String::new(),
+            name: String::new(),
+            steam_id: steam.into(),
+            grid: String::new(),
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            look: None,
+            look_at: None,
+            look_distance: None,
+            time: 1,
+            version: String::new(),
+            fixed: fixed.then(|| Fixed { time: 1, version: String::new() }),
+            repeats: 0,
+            also: Vec::new(),
+        };
+        book.reports.push(old(0, "76561198000000001", false));
+        book.reports.push(old(1, "76561198000000001", true));
+        book.reports.extend((2..MAX_REPORTS).map(|n| old(n, "76561198000000002", false)));
+        book.file(vec![report(1000, "76561198000000003")], "Island.map", &[]);
+        assert_eq!(book.reports.len(), MAX_REPORTS);
+        assert!(!book.reports.iter().any(|r| r.id == "o1"), "the fixed one went first");
+        book.file(vec![report(1001, "76561198000000003")], "Island.map", &[]);
+        assert_eq!(book.reports.len(), MAX_REPORTS);
+        assert!(book.reports.iter().any(|r| r.id == "o0"), "the other tester's report stays");
+        assert!(!book.reports.iter().any(|r| r.id == "o2"), "the flooder's oldest went");
+        assert!(book.reports.iter().any(|r| r.id == "r1000") && book.reports.iter().any(|r| r.id == "r1001"));
+    }
+
+    /// Third sweep, S8: a language file's text can't end the console command it goes into.
+    #[test]
+    fn language_text_goes_into_a_command_tamed() {
+        assert_eq!(console_text("bug #3 is on the host's list. Thanks!"), "bug #3 is on the host's list. Thanks!");
+        assert_eq!(console_text("thanks\"; quit; say \"x\nkick *"), "thanks quit say xkick *");
+        assert!(console_text(&"x".repeat(500)).len() <= 200);
     }
 
     #[test]
@@ -1177,9 +1502,46 @@ mod tests {
         std::fs::write(dir.join("carbon").join("managed").join("Carbon.dll"), b"x").unwrap();
         let path = install_plugin(&dir).unwrap().unwrap();
         assert_eq!(path, dir.join("carbon").join("plugins").join(PLUGIN_FILE));
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), PLUGIN);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), stamped());
+        assert!(std::fs::read_to_string(&path).unwrap().starts_with(PLUGIN));
         remove_plugin(&dir);
         assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_plugin_you_changed_is_kept() {
+        let dir = std::env::temp_dir().join(format!("droplaunch-plugin-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("carbon").join("managed")).unwrap();
+        std::fs::write(dir.join("carbon").join("managed").join("Carbon.dll"), b"x").unwrap();
+        let path = dir.join("carbon").join("plugins").join(PLUGIN_FILE);
+        // An older DropLaunch's (no stamp, or another version's stamp): replaced.
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "// older plugin").unwrap();
+        install_plugin(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), stamped());
+        let older = format!("// older plugin\n{STAMP} {:016x}). x\n", fnv("// older plugin\n"));
+        assert!(!edited(&older));
+        std::fs::write(&path, &older).unwrap();
+        install_plugin(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), stamped());
+        assert!(!plugin_edited(&dir));
+        // Yours: kept, also while the plugin is out.
+        let mine = stamped().replace("class ", "class /* mine */ ");
+        std::fs::write(&path, &mine).unwrap();
+        assert!(plugin_edited(&dir));
+        install_plugin(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), mine);
+        remove_plugin(&dir);
+        assert!(!path.exists() && path.with_extension(KEPT_EXT).is_file());
+        assert!(plugin_edited(&dir));
+        install_plugin(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), mine);
+        // Put back on request.
+        assert_eq!(restore_plugin(std::slice::from_ref(&dir)).unwrap(), 1);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), stamped());
+        assert!(!plugin_edited(&dir));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
